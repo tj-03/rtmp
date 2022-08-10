@@ -22,4 +22,4 @@ type C1 struct {
 
 type C2 = C1
 type S1 = C1
-type S2 = S1
+type S2 = C1
