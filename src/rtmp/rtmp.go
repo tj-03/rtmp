@@ -7,11 +7,14 @@ import (
 	"net"
 	"strconv"
 
-	"github.com/tj03/rtmp/src/chunk"
+	"github.com/tj03/rtmp/src/message"
 	"github.com/tj03/rtmp/src/parser"
 )
 
+//Stream context will be a pub sub object that will allow for different connections to create streams to send data to and receive data from. Each time a stream is written to,
+//the stream context will forward that data to all subscirbers of that stream
 type StreamContext struct {
+	//unimplemented
 }
 
 type Context struct {
@@ -33,15 +36,14 @@ func (server *Server) Listen(port int) error {
 	server.sessions = make(map[int]*Session)
 	defer tcpSocket.Close()
 	for {
-		rawConnection, err := tcpSocket.Accept()
-		conn := bufio.NewReadWriter(bufio.NewReader(rawConnection), bufio.NewWriter(rawConnection))
+		tcpConnection, err := tcpSocket.Accept()
+		conn := bufio.NewReadWriter(bufio.NewReader(tcpConnection), bufio.NewWriter(tcpConnection))
 		//change this eventually -> we dont want to crash because of one failed connection
 		if err != nil {
 			return err
 		}
 		server.OnConnection(conn)
 	}
-	return nil
 }
 
 func (server *Server) OnConnection(c *bufio.ReadWriter) {
@@ -63,7 +65,7 @@ const (
 type Session struct {
 	conn         *bufio.ReadWriter
 	state        RTMPSessionState
-	chunkStreams chunk.ChunkStreams
+	chunkStreams message.ChunkStreams
 	context      *Context
 	chunkSize    int
 }
@@ -73,21 +75,18 @@ func (session *Session) HandleConnection(conn *bufio.ReadWriter) error {
 	session.chunkSize = 128
 	session.CompleteHandshake()
 	conn.Flush()
-	err, c := chunk.NewChunkFromStream(session.conn.Reader, session.chunkSize)
+	mm := message.MessageReader{ChunkSize: session.chunkSize}
+	cm := message.NewChunkReader()
+	err, _ := mm.ReadMessageFromStream(session.conn.Reader, &cm)
 	if err != nil {
 		return err
 	}
-	fmt.Println("First chunk basic head", c.BasicHeader)
-	fmt.Println("First chunk message head", c.MessageHeader)
-	fmt.Println("First chunk data", c.ChunkData)
-	conn.Write(make([]byte, 2048))
-	err, c = chunk.NewChunkFromStream(session.conn.Reader, session.chunkSize)
+	mm.ChunkSize = 4096
+	err, _ = mm.ReadMessageFromStream(session.conn.Reader, &cm)
 	if err != nil {
 		return err
 	}
-	fmt.Println("First chunk basic head", c.BasicHeader)
-	fmt.Println("First chunk message head", c.MessageHeader)
-	fmt.Println("First chunk data", c.ChunkData)
+
 	return nil
 }
 
@@ -106,16 +105,16 @@ func (session *Session) CompleteHandshake() error {
 	data := make([]byte, parser.C1SIZE)
 	n, err := io.ReadFull(conn.Reader, data)
 	if err != nil {
-		return err
+		panic("bad read handshake")
 	}
 	if n < len(data) {
 		panic("Didnt read everything in handshae")
 	}
-	conn.Writer.Write(make([]byte, parser.C1SIZE))
-	conn.Writer.Flush()
+	conn.Write(make([]byte, parser.C1SIZE))
+	conn.Flush()
 	n, err = io.ReadFull(conn.Reader, data)
 	if err != nil {
-		return err
+		panic("bdd read handshake")
 	}
 	if n < len(data) {
 		panic("Didnt read everything in handshae")
