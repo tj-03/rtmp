@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"encoding/binary"
 	"fmt"
+
+	"github.com/tj03/rtmp/src/logger"
 )
 
 //might not use, think i might use it to get prev chunk fo a msg stream/chunk stream
@@ -38,15 +40,21 @@ func handleExtendedTimestamp() {
 
 }
 
-func NewChunkReader() ChunkReader {
-	return ChunkReader{make(map[int]ChunkMessageHeader)}
-}
-
 type ChunkReader struct {
-	ChunkStreams map[int]ChunkMessageHeader
+	chunkStreams map[int]ChunkMessageHeader
+	ChunkSize    int
+	conn         *bufio.ReadWriter
 }
 
-func (cReader *ChunkReader) ReadChunkFromStream(reader *bufio.Reader, chunkPayloadSize int) (error, Chunk) {
+func (cReader *ChunkReader) Init(conn *bufio.ReadWriter, chunkSize int) {
+	cReader.conn = conn
+	cReader.ChunkSize = chunkSize
+	cReader.chunkStreams = make(map[int]ChunkMessageHeader)
+}
+
+func (cReader *ChunkReader) ReadChunkFromStream() (error, Chunk) {
+	chunkPayloadSize := cReader.ChunkSize
+	reader := cReader.conn
 	fmtCsid, err := reader.ReadByte()
 	format := uint8(fmtCsid >> 6)
 	csid := uint16(fmtCsid & 0b00111111)
@@ -77,15 +85,15 @@ func (cReader *ChunkReader) ReadChunkFromStream(reader *bufio.Reader, chunkPaylo
 	//TODO: handle other fmt values
 	switch format {
 	case 0:
-		data := make([]byte, 11)
+		headerSize := 11
+		data := make([]byte, headerSize)
 		n, err := reader.Read(data)
 		if err != nil {
 			return err, Chunk{}
 		}
 		fmt.Println("Message header", data)
-		if n != 11 {
-			fmt.Println("Messasge header read incorrectly")
-			panic(n)
+		if n != headerSize {
+			logger.ErrorLog.Fatalln("Header read improperly", data, n)
 		}
 		timestamp := binary.BigEndian.Uint32(append([]byte{0}, data[0:3]...))
 		chunkMessageHeader.Timestamp = timestamp
@@ -95,10 +103,51 @@ func (cReader *ChunkReader) ReadChunkFromStream(reader *bufio.Reader, chunkPaylo
 		messageTypeId := data[6]
 		chunkMessageHeader.MessageTypeId = messageTypeId
 		chunkMessageHeader.MessageStreamId = binary.LittleEndian.Uint32(data[7:11])
-		cReader.ChunkStreams[int(csid)] = chunkMessageHeader
+		cReader.chunkStreams[int(csid)] = chunkMessageHeader
 	case 1:
+		headerSize := 7
+		data := make([]byte, headerSize)
+		n, err := reader.Read(data)
+		if err != nil {
+			return err, Chunk{}
+		}
+		fmt.Println("Message header", data)
+		if n != headerSize {
+			logger.ErrorLog.Fatalln("Header read improperly", data, n)
+		}
+		timestamp := binary.BigEndian.Uint32(append([]byte{0}, data[0:3]...))
+		chunkMessageHeader.Timestamp = timestamp
+
+		messageLength := binary.BigEndian.Uint32(append([]byte{0}, data[3:6]...))
+		chunkMessageHeader.MessageLength = messageLength
+		messageTypeId := data[6]
+		chunkMessageHeader.MessageTypeId = messageTypeId
+		if header, ok := cReader.chunkStreams[int(csid)]; ok {
+			chunkMessageHeader.MessageStreamId = header.MessageStreamId
+		}
 	case 2:
+		headerSize := 3
+		data := make([]byte, headerSize)
+		n, err := reader.Read(data)
+		if err != nil {
+			return err, Chunk{}
+		}
+		fmt.Println("Message header", data)
+		if n != headerSize {
+			logger.ErrorLog.Fatalln("Header read improperly", data, n)
+		}
+		if header, ok := cReader.chunkStreams[int(csid)]; ok {
+			chunkMessageHeader = header
+		}
+
+		timestamp := binary.BigEndian.Uint32(append([]byte{0}, data[0:3]...))
+		chunkMessageHeader.Timestamp = timestamp
+	case 3:
+		if header, ok := cReader.chunkStreams[int(csid)]; ok {
+			chunkMessageHeader = header
+		}
 	}
+	cReader.chunkStreams[int(csid)] = chunkMessageHeader
 	chunk := Chunk{BasicHeader: chunkBasicHeader,
 		MessageHeader: &chunkMessageHeader}
 	//TODO: check if chunksize is greater than REMAINING message size -> have to use previous chunks

@@ -2,11 +2,14 @@ package rtmp
 
 import (
 	"bufio"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
 	"strconv"
 
+	"github.com/tj03/rtmp/src/amf"
+	"github.com/tj03/rtmp/src/logger"
 	"github.com/tj03/rtmp/src/message"
 	"github.com/tj03/rtmp/src/parser"
 )
@@ -30,9 +33,10 @@ type Server struct {
 func (server *Server) Listen(port int) error {
 	tcpSocket, err := net.Listen("tcp", ":"+strconv.FormatInt(int64(port), 10))
 	if err != nil {
+		logger.ErrorLog.Println(err)
 		return err
 	}
-	fmt.Println("Listening on port", port)
+	logger.InfoLog.Println("Listening on port", port)
 	server.sessions = make(map[int]*Session)
 	defer tcpSocket.Close()
 	for {
@@ -63,11 +67,10 @@ const (
 )
 
 type Session struct {
-	conn         *bufio.ReadWriter
-	state        RTMPSessionState
-	chunkStreams message.ChunkStreams
-	context      *Context
-	chunkSize    int
+	conn      *bufio.ReadWriter
+	state     RTMPSessionState
+	context   *Context
+	chunkSize int
 }
 
 func (session *Session) HandleConnection(conn *bufio.ReadWriter) error {
@@ -75,19 +78,54 @@ func (session *Session) HandleConnection(conn *bufio.ReadWriter) error {
 	session.chunkSize = 128
 	session.CompleteHandshake()
 	conn.Flush()
-	mm := message.MessageReader{ChunkSize: session.chunkSize}
-	cm := message.NewChunkReader()
-	err, _ := mm.ReadMessageFromStream(session.conn.Reader, &cm)
-	if err != nil {
-		return err
-	}
-	mm.ChunkSize = 4096
-	err, _ = mm.ReadMessageFromStream(session.conn.Reader, &cm)
-	if err != nil {
-		return err
-	}
+	return session.Run()
+}
 
-	return nil
+func (session *Session) Run() error {
+	var messageReader message.MessageReader
+	messageReader.Init(session.conn, session.chunkSize)
+	for {
+		err, msg := messageReader.ReadMessageFromStream()
+		if err != nil {
+			logger.ErrorLog.Println(err)
+			return err
+		}
+		switch msg.MessageType {
+		case message.SetChunkSize:
+			session.handleSetChunkSize(msg.MessageData, &messageReader)
+		case message.CommandMsg0, message.CommandMsg3:
+
+			logger.InfoLog.Println("Lenfgth of amf0 bytes", len(msg.MessageData))
+			session.handleCommandMessage(msg.MessageData)
+		default:
+			logger.ErrorLog.Fatalln("Unimplemented message type", msg.MessageType)
+		}
+
+	}
+}
+
+func (session *Session) handleSetChunkSize(data []byte, messageReader *message.MessageReader) {
+	if data[0] != 0 {
+		logger.WarningLog.Println("Set chunk size message err - first bit not 0", data)
+		return
+	}
+	if len(data) != 4 {
+		logger.WarningLog.Println("Set chunk size payload err - payload length not 4")
+	}
+	chunkSize := binary.BigEndian.Uint32(data[0:4])
+	logger.InfoLog.Println("Setting chunk size:", chunkSize)
+	messageReader.SetChunkSize(int(chunkSize))
+}
+
+func (session *Session) handleCommandMessage(data []byte) {
+	arr, _, _ := amf.DecodeBytes(data)
+	logger.InfoLog.Println("Total AMF values = ", len(arr))
+
+	if false {
+		logger.ErrorLog.Fatalln("Command message payload does not have a string(cmd message) as first amf object")
+	}
+	logger.InfoLog.Fatalln("Command name = ", arr[2].(map[string]interface{}))
+
 }
 
 func (session *Session) CompleteHandshake() error {
