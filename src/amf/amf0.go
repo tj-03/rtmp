@@ -1,5 +1,6 @@
 package amf
 
+//AMF0 Module taken from: https://github.com/speps/go-amf at commit https://github.com/speps/go-amf/tree/bdc4c20b87cfbdd5d5fa7e11aa5665d0aacb7a11
 import (
 	"bytes"
 	"encoding/binary"
@@ -147,7 +148,14 @@ func decodeObject(v []byte) (map[string]interface{}, int, error) {
 	return result, offset, nil
 }
 
-func EncodeAMF0(v interface{}) []byte {
+func EncodeAMF0(args ...interface{}) []byte {
+	if len(args) == 0 {
+		return []byte{}
+	}
+	if len(args) > 1 {
+		return encodeStrictArr(args)
+	}
+	v := args[0]
 	switch v.(type) {
 	case float64:
 		return encodeNumber(v.(float64))
@@ -288,33 +296,12 @@ func encodeDate(v time.Time) []byte {
 	return msg
 }
 
-func encodeStrictArr(v []interface{}) []byte {
-	buf := new(bytes.Buffer)
-	StringExt := false
-	for _, k := range v {
-		switch k.(type) {
-		case string:
-			if len(k.(string)) > 0xffff {
-				StringExt = true
-			}
-		}
+func encodeStrictArr(arr []interface{}) []byte {
+	res := []byte{}
+	for i := range arr {
+		res = append(res, EncodeAMF0(arr[i])...)
 	}
-	for _, k := range v {
-		if StringExt {
-			msg := make([]byte, 1+4+len(k.(string))) // 1 header + 4 length + length of string
-			msg[0] = byte(amf0StringExt)
-			binary.BigEndian.PutUint32(msg[1:], uint32(len(k.(string))))
-			copy(msg[5:], k.(string))
-			buf.Write(msg)
-			continue
-		}
-		buf.Write(EncodeAMF0(k))
-	}
-	msg := make([]byte, 1+8+buf.Len()) // 1 header + 8 array count + length
-	msg[0] = byte(amf0StrictArr)
-	binary.BigEndian.PutUint32(msg[1:], uint32(len(v)))
-	copy(msg[9:], buf.Bytes())
-	return msg
+	return res
 }
 
 func encodeXml(v Amf0Xml) []byte {

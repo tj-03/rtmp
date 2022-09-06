@@ -1,13 +1,19 @@
 package message
 
 import (
-	"bufio"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/tj03/rtmp/src/logger"
 )
+
+type Connection interface {
+	io.Reader
+	io.Writer
+	io.ByteReader
+}
 
 type ChunkBasicHeader struct {
 	Fmt uint8
@@ -37,25 +43,32 @@ type Chunk struct {
 
 // }
 
-func currentTimeStamp() int {
-	return 0
-}
+// func currentTimeStamp() int {
+// 	return 0
+// }
 
 type ChunkStreamer struct {
 	chunkStreams map[int]ChunkMessageHeader
 	ChunkSize    int
-	conn         *bufio.ReadWriter
+	conn         Connection
+}
+
+func (cReader *ChunkStreamer) Init(conn Connection, chunkSize int) {
+	cReader.conn = conn
+	cReader.ChunkSize = chunkSize
+	cReader.chunkStreams = make(map[int]ChunkMessageHeader)
 }
 
 func ChunksToBytes(chunks []Chunk) ([]byte, error) {
 	if len(chunks) == 0 {
 		return nil, errors.New("empty chunks")
 	}
-	messageLength := chunks[0].MessageHeader.MessageLength
-	messageTypeId := byte(chunks[0].MessageHeader.MessageTypeId)
-	messageStreamId := uint32(chunks[0].MessageHeader.MessageStreamId)
 	bytes := []byte{}
 	for _, chunk := range chunks {
+		messageLength := chunk.MessageHeader.MessageLength
+		messageTypeId := byte(chunk.MessageHeader.MessageTypeId)
+		messageStreamId := uint32(chunk.MessageHeader.MessageStreamId)
+
 		encodedChunk := []byte{}
 		format := chunk.BasicHeader.Fmt
 		fmtCsid := make([]byte, 1)
@@ -111,27 +124,20 @@ func (cStreamer *ChunkStreamer) WriteChunksToStream(chunks []Chunk) error {
 	if err != nil {
 		logger.ErrorLog.Fatalln(err)
 	}
-	err = cStreamer.conn.Flush()
 	if err != nil {
 		logger.ErrorLog.Fatalln(err)
 	}
 	return nil
 }
 
-func (cReader *ChunkStreamer) Init(conn *bufio.ReadWriter, chunkSize int) {
-	cReader.conn = conn
-	cReader.ChunkSize = chunkSize
-	cReader.chunkStreams = make(map[int]ChunkMessageHeader)
-}
-
-func (cReader *ChunkStreamer) ReadChunkFromStream() (error, Chunk) {
+func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, error) {
 	chunkPayloadSize := cReader.ChunkSize
 	reader := cReader.conn
 	fmtCsid, err := reader.ReadByte()
 	format := uint8(fmtCsid >> 6)
 	csid := uint16(fmtCsid & 0b00111111)
 	if err != nil {
-		return err, Chunk{}
+		return Chunk{}, err
 	}
 	var chunkBasicHeader ChunkBasicHeader
 	chunkBasicHeader.Fmt = format
@@ -149,7 +155,7 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (error, Chunk) {
 		csid = 64 + binary.BigEndian.Uint16(data)
 	}
 	if err != nil {
-		return err, Chunk{}
+		return Chunk{}, err
 	}
 	chunkBasicHeader.ChunkStreamId = uint64(csid)
 
@@ -161,7 +167,7 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (error, Chunk) {
 		data := make([]byte, headerSize)
 		n, err := reader.Read(data)
 		if err != nil {
-			return err, Chunk{}
+			return Chunk{}, err
 		}
 		if n != headerSize {
 			logger.ErrorLog.Fatalln("Header read improperly", data, n)
@@ -180,9 +186,8 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (error, Chunk) {
 		data := make([]byte, headerSize)
 		n, err := reader.Read(data)
 		if err != nil {
-			return err, Chunk{}
+			return Chunk{}, err
 		}
-		fmt.Println("Message header", data)
 		if n != headerSize {
 			logger.ErrorLog.Fatalln("Header read improperly", data, n)
 		}
@@ -201,9 +206,8 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (error, Chunk) {
 		data := make([]byte, headerSize)
 		n, err := reader.Read(data)
 		if err != nil {
-			return err, Chunk{}
+			return Chunk{}, err
 		}
-		fmt.Println("Message header", data)
 		if n != headerSize {
 			logger.ErrorLog.Fatalln("Header read improperly", data, n)
 		}
@@ -230,9 +234,9 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (error, Chunk) {
 	data := make([]byte, size)
 	_, err = reader.Read(data)
 	if err != nil {
-		return err, Chunk{}
+		return Chunk{}, err
 	}
 	chunk.ChunkData = data
-	return nil, chunk
+	return chunk, nil
 
 }

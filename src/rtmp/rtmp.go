@@ -3,6 +3,7 @@ package rtmp
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"strconv"
@@ -14,20 +15,20 @@ import (
 
 //Stream context will be a pub sub object that will allow for different connections to create streams to send data to and receive data from. Each time a stream is written to,
 //the stream context will forward that data to all subscirbers of that stream
-type StreamContext struct {
-	//unimplemented
-}
+//Subscribing to a stream will invole locking the entire map -> may consider using array instead of map
 
 var COMMAND_MESSAGE_CHUNK_STREAM = 3
 
-type Context struct {
-	streamContext StreamContext
-}
 type Server struct {
 	//change to arr?
 	sessions     map[int]*Session
 	context      Context
 	sessionCount int
+}
+
+type Connection struct {
+	io.Closer
+	bufio.ReadWriter
 }
 
 func (server *Server) Listen(port int) error {
@@ -36,38 +37,40 @@ func (server *Server) Listen(port int) error {
 		logger.ErrorLog.Println(err)
 		return err
 	}
+	defer tcpSocket.Close()
 	logger.InfoLog.Println("Listening on port", port)
 	server.sessions = make(map[int]*Session)
-	defer tcpSocket.Close()
 	for {
 		tcpConnection, err := tcpSocket.Accept()
-		conn := bufio.NewReadWriter(bufio.NewReader(tcpConnection), bufio.NewWriter(tcpConnection))
-		//change this eventually -> we dont want to crash because of one failed connection
 		if err != nil {
 			return err
 		}
-		server.OnConnection(conn)
+		bufferedConnection := bufio.NewReadWriter(bufio.NewReader(tcpConnection), bufio.NewWriter(tcpConnection))
+		//change this eventually -> we dont want to crash the whole server because of one failed connection
+		c := &Connection{tcpConnection, *bufferedConnection}
+
+		server.OnConnection(c)
 	}
 }
 
-func (server *Server) OnConnection(c *bufio.ReadWriter) {
-	server.sessions[server.sessionCount] = &Session{context: &server.context}
+func (server *Server) OnConnection(c *Connection) {
+	server.context.ClientStreams = make(map[int]string)
+	server.context.Publishers = map[string]*Publisher{}
+	server.sessions[server.sessionCount] = &Session{context: &server.context, sessionId: server.sessionCount}
 	go server.sessions[server.sessionCount].HandleConnection(c)
 	server.sessionCount += 1
-}
-
-type Handler struct {
 }
 
 type RTMPSessionState int
 
 const (
-	Uninitialized RTMPSessionState = iota
-	HandshakeCompleted
+	Disconnected RTMPSessionState = iota
+	Connected
 )
 
 type Session struct {
-	conn            *bufio.ReadWriter
+	conn            *Connection
+	sessionId       int
 	state           RTMPSessionState
 	context         *Context
 	chunkSize       int
@@ -75,7 +78,8 @@ type Session struct {
 	messageStreamer message.MessageStreamer
 }
 
-func (session *Session) HandleConnection(conn *bufio.ReadWriter) error {
+func (session *Session) HandleConnection(conn *Connection) error {
+	defer conn.Close()
 	session.streamCount = 6
 	session.conn = conn
 	session.chunkSize = 128
@@ -92,23 +96,30 @@ func (session *Session) Run() error {
 	session.messageStreamer.Init(session.conn, session.chunkSize)
 
 	for {
-		err, msg := session.messageStreamer.ReadMessageFromStream()
+		msg, err := session.messageStreamer.ReadMessageFromStream()
 		if err != nil {
 			logger.ErrorLog.Println(err)
 			return err
 		}
 		logger.InfoLog.Println("New message", msg)
 		switch msg.MessageType {
+
 		case message.SetChunkSize:
 			session.handleSetChunkSize(msg.MessageData)
 
 		case message.CommandMsg0, message.CommandMsg3:
 			session.handleCommandMessage(msg.MessageData)
+
+		case message.DataMsg0:
+			session.handleDataMessage(msg.MessageData)
+
 		case message.Ack:
 			//session.messageStreamer.WriteMessageToStream(message.NewMessage([]byte{0, 6, 0, 0, 0, 0}, message.UserControl, 0))
+
 		default:
 			logger.ErrorLog.Fatalln("Unimplemented message type", msg.MessageType)
 		}
+		session.conn.Flush()
 	}
 }
 
@@ -140,8 +151,8 @@ func (session *Session) handleCommandMessage(data []byte) error {
 		session.handleConnectCommand(amfObjects)
 	case "createStream":
 		session.handleCreateStreamCommand(amfObjects)
-	case "":
-
+	case "publish":
+		session.handlePublishCommand(amfObjects)
 	case "releaseStream", "FCPublish":
 		logger.WarningLog.Println("Unknown command message received. Unhandled. Objects:", amfObjects)
 	default:
@@ -151,7 +162,6 @@ func (session *Session) handleCommandMessage(data []byte) error {
 }
 
 func (session *Session) handleConnectCommand(objects []interface{}) {
-	response := []byte{}
 	var result string
 	if len(objects) <= 3 {
 		result = "_result"
@@ -159,21 +169,19 @@ func (session *Session) handleConnectCommand(objects []interface{}) {
 		result = "_error"
 	}
 	logger.InfoLog.Println("Connect object from client", objects[2])
-	encoded := append(amf.EncodeAMF0(result), amf.EncodeAMF0(1)...)
-	info := amf.EncodeAMF0(map[string]interface{}{
+	info := map[string]interface{}{
 		"fmsVer":       "FMS/3,0,1,123",
 		"capabilities": 31,
-	})
+	}
 
-	props := amf.EncodeAMF0(map[string]interface{}{
+	props := map[string]interface{}{
 		"level":          "status",
 		"code":           "NetConnection.Connect.Success",
 		"description":    "Connection succeeds",
 		"objectEncoding": 0,
-	})
-	response = append(response, encoded...)
-	response = append(response, info...)
-	response = append(response, props...)
+	}
+
+	response := amf.EncodeAMF0(result, 1, props, info)
 
 	winAckMsg := message.NewWinAckMessage(5000000)
 	setBandwidthMsg := message.NewSetPeerBandwidthMessage(5000000, 2)
@@ -193,13 +201,14 @@ func (session *Session) handleConnectCommand(objects []interface{}) {
 	logger.InfoLog.Println("Writing stream begin message")
 	session.messageStreamer.WriteMessageToStream(streamBeginMsg)
 
-	resMsg := message.NewCommandMessage0(response, 20, 3)
+	resMsg := message.NewCommandMessage0(response, 0, COMMAND_MESSAGE_CHUNK_STREAM)
 	logger.InfoLog.Println("Writing connect response", resMsg)
 	session.messageStreamer.WriteMessageToStream(resMsg)
+	session.state = Connected
 }
 
 func (session *Session) handleCreateStreamCommand(objects []interface{}) error {
-	responseData := []byte{}
+	var responseData []byte
 	validObjects := len(objects) >= 2
 	var transactionId float64
 	var ok bool
@@ -208,15 +217,9 @@ func (session *Session) handleCreateStreamCommand(objects []interface{}) error {
 		validObjects = validObjects && ok
 	}
 	if !validObjects {
-		responseData = append(responseData, amf.EncodeAMF0("_error")...)
-		responseData = append(responseData, amf.EncodeAMF0(-1)...)
-		responseData = append(responseData, amf.EncodeAMF0(nil)...)
-		responseData = append(responseData, amf.EncodeAMF0(map[string]interface{}{"error": "No transactionId"})...)
+		responseData = amf.EncodeAMF0("_error", -1, nil, "No transaction Id given")
 	} else {
-		responseData = append(responseData, amf.EncodeAMF0("_result")...)
-		responseData = append(responseData, amf.EncodeAMF0(transactionId)...)
-		responseData = append(responseData, amf.EncodeAMF0(nil)...)
-		responseData = append(responseData, amf.EncodeAMF0(session.streamCount)...)
+		responseData = amf.EncodeAMF0("_result", transactionId, nil, session.streamCount)
 		session.streamCount++
 	}
 
@@ -225,37 +228,84 @@ func (session *Session) handleCreateStreamCommand(objects []interface{}) error {
 	return nil
 }
 
+//very incomplete
+func (session *Session) handlePublishCommand(objects []interface{}) error {
+
+	streamName, ok := session.context.ClientStreams[session.sessionId]
+	if ok {
+		session.messageStreamer.WriteMessageToStream(message.NewStatusMessage("error", "NetStream.Publish.BadConnection", "Connection already publishing", 0))
+		return nil
+	}
+	if session.state == Disconnected {
+		logger.WarningLog.Println("Client attempted publishing without connecting")
+		return nil
+	}
+
+	session.context.Publishers[streamName] = &Publisher{SessionId: session.sessionId, Subscribers: []*bufio.ReadWriter{}, Metadata: nil}
+	//	session.context.SetPublisher(&Publisher{SessionId:session.sessionId, Subscribers:[]*bufio.ReadWriter{}, Metadata:nil})
+	session.messageStreamer.WriteMessageToStream(message.NewStatusMessage(
+		"status",
+		"NetStream.Publish.Start",
+		"Stream published",
+		0))
+
+	return nil
+}
+
+func (session *Session) handleDataMessage(data []byte) error {
+	objs, _, _ := amf.DecodeBytes(data)
+	if len(objs) < 3 {
+		//handle bad data message
+		return nil
+	}
+	logger.InfoLog.Println("Data message received. AMF?:", objs)
+	if streamName, ok := session.context.ClientStreams[session.sessionId]; ok {
+		if publisher, ok := session.context.Publishers[streamName]; ok {
+			publisher.Metadata = data
+			for _, subscriber := range publisher.Subscribers {
+				_, err := subscriber.Write(data)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	buf := amf.EncodeAMF0("onMetaData")
+	buf = append(buf, amf.EncodeAMF0(buf[2])...)
+	session.messageStreamer.WriteMessageToStream(message.NewCommandMessage0(buf, 0, COMMAND_MESSAGE_CHUNK_STREAM))
+	return nil
+}
+
 func (session *Session) CompleteHandshake() error {
 	//RTMPVersion := 3
 	conn := session.conn
-	//ignore client version
+
 	//read C0
-	clientVersion, err := conn.Reader.ReadByte()
+	clientVersion, err := conn.ReadByte()
 	if err != nil {
 		return err
 	}
 	//send S0
-	conn.Writer.WriteByte(clientVersion)
+	conn.WriteByte(clientVersion)
 	rando := make([]byte, S1SIZE)
-	rando[0] = 35
-	rando[1] = 010
-	conn.Writer.Write(rando)
+	conn.Write(rando)
+	conn.Flush()
 	data := make([]byte, C1SIZE)
-	n, err := io.ReadFull(conn.Reader, data)
+	n, err := io.ReadFull(conn, data)
 	if err != nil {
-		panic("bad read handshake")
+		return err
 	}
 	if n < len(data) {
-		panic("Didnt read everything in handshae")
+		return errors.New("failed to read handshake from client")
 	}
 	conn.Write(data)
 	conn.Flush()
-	n, err = io.ReadFull(conn.Reader, data)
+	n, err = io.ReadFull(conn, data)
 	if err != nil {
-		panic("bdd read handshake")
+		return err
 	}
 	if n < len(data) {
-		panic("Didnt read everything in handshae")
+		return errors.New("failed to read handshake from client")
 	}
 	return nil
 
