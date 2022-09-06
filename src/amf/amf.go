@@ -6,6 +6,9 @@ import (
 )
 
 type AMFVersion uint8
+type Amf0Reference uint16
+type Amf0ECMAArray map[string]interface{}
+type Amf0Xml string
 
 const (
 	AMF0 AMFVersion = 0x1
@@ -27,6 +30,7 @@ const (
 	amf0StrictArr      = 0x0a
 	amf0Date           = 0x0b
 	amf0StringExt      = 0x0c
+	amf0Xml            = 0x0f
 )
 
 const (
