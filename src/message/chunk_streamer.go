@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"github.com/tj03/rtmp/src/logger"
+	"github.com/tj03/rtmp/src/util"
 )
 
 type Connection interface {
@@ -48,14 +49,16 @@ type Chunk struct {
 // }
 
 type ChunkStreamer struct {
-	chunkStreams map[int]ChunkMessageHeader
-	ChunkSize    int
-	conn         Connection
+	chunkStreams    map[int]ChunkMessageHeader
+	bytesLeftToRead int
+	ChunkSize       int
+	conn            Connection
 }
 
 func (cReader *ChunkStreamer) Init(conn Connection, chunkSize int) {
 	cReader.conn = conn
 	cReader.ChunkSize = chunkSize
+	cReader.bytesLeftToRead = 0
 	cReader.chunkStreams = make(map[int]ChunkMessageHeader)
 }
 
@@ -151,7 +154,14 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, error) {
 	//this is wrong lol -> 3 byte calculation off, go to specs to see why
 	case 1:
 		data := make([]byte, 2)
-		_, err = reader.Read(data)
+		n, err := reader.Read(data)
+		if err != nil {
+			logger.ErrorLog.Println(err)
+			return Chunk{}, err
+		}
+		if n != 2 {
+			logger.ErrorLog.Println("Basic header read incorrectly - Supposed to read 2 - read", n)
+		}
 		csid = 64 + binary.BigEndian.Uint16(data)
 	}
 	if err != nil {
@@ -213,6 +223,10 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, error) {
 		}
 		if header, ok := cReader.chunkStreams[int(csid)]; ok {
 			chunkMessageHeader = header
+		} else {
+			errMsg := fmt.Sprintf("Client asked for previous chunk but there's no previous chunk. Chunk stream d = %d. FMT = %d\n", csid, format)
+			logger.ErrorLog.Println(errMsg)
+			//panic(errMsg)
 		}
 
 		timestamp := binary.BigEndian.Uint32(append([]byte{0}, data[0:3]...))
@@ -220,6 +234,10 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, error) {
 	case 3:
 		if header, ok := cReader.chunkStreams[int(csid)]; ok {
 			chunkMessageHeader = header
+		} else {
+			errMsg := fmt.Sprintf("Client asked for previous chunk but there's no previous chunk. Chunk stream d = %d. FMT = %d\n", csid, format)
+			logger.ErrorLog.Println(errMsg)
+			//panic(errMsg)
 		}
 	}
 	cReader.chunkStreams[int(csid)] = chunkMessageHeader
@@ -227,14 +245,25 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, error) {
 		BasicHeader:   chunkBasicHeader,
 		MessageHeader: chunkMessageHeader}
 	//TODO: check if chunksize is greater than REMAINING message size -> have to use previous chunks
-	size := chunkPayloadSize
-	if int(chunk.MessageHeader.MessageLength) < size {
-		size = int(chunk.MessageHeader.MessageLength)
+
+	if cReader.bytesLeftToRead < 0 {
+		panic("Bytes left to read < 0")
 	}
+	if cReader.bytesLeftToRead == 0 {
+		cReader.bytesLeftToRead = int(chunkMessageHeader.MessageLength)
+	}
+	bytesLeft := cReader.bytesLeftToRead
+	size := util.Min(bytesLeft, chunkPayloadSize)
+
+	cReader.bytesLeftToRead -= size
+
 	data := make([]byte, size)
-	_, err = reader.Read(data)
+	n, err := reader.Read(data)
 	if err != nil {
 		return Chunk{}, err
+	}
+	if n != size {
+		panic("didnt read everything in chunk data")
 	}
 	chunk.ChunkData = data
 	return chunk, nil

@@ -83,7 +83,7 @@ func (mStreamer *MessageStreamer) ReadMessageFromStream() (Message, error) {
 	cStreamer := mStreamer.chunkStreamer
 	chunk, err := cStreamer.ReadChunkFromStream()
 	if err != nil {
-		return Message{}, nil
+		return Message{}, err
 	}
 	var message Message
 	msgLength := int(chunk.MessageHeader.MessageLength)
@@ -100,8 +100,14 @@ func (mStreamer *MessageStreamer) ReadMessageFromStream() (Message, error) {
 
 		message.MessageData = append(message.MessageData, chunk.ChunkData...)
 	}
+	previewSize := len(message.MessageData)
+	if previewSize > 32 {
+		previewSize = 32
+	}
 	if msgLength != len(message.MessageData) {
-		logger.ErrorLog.Println("Message data length not equal to length specified in message header", message)
+		l := len(message.MessageData)
+		message.MessageData = message.MessageData[:previewSize]
+		logger.ErrorLog.Println("Message data length not equal to length specified in message header", "Header Length:", msgLength, "Provided Lenght:", l, "Message:", message)
 	}
 	message.MessageType = msgTypeId
 	message.MessageStreamId = msgStreamId

@@ -74,25 +74,25 @@ func cmpChunks(c1 Chunk, c2 Chunk) bool {
 }
 
 func TestBytesToChunk(t *testing.T) {
-	correct1 := []byte{2, 0, 0, 0, 0, 0, 4, 5, 0, 0, 0, 0, 0, 76, 75, 64}
-	correct2 := []byte{66, 0, 0, 0, 0, 0, 5, 6, 0, 76, 75, 64, 2}
+	correct1 := []byte{2, 0, 0, 0, 0, 0, 8, 6, 0, 0, 0, 0, 0, 76, 75, 64}
+	correct2 := []byte{66, 0, 0, 0, 0, 0, 8, 6, 0, 76, 75, 64}
 	bytes := append(correct1, correct2...)
 	correctChunks := []Chunk{
 		{
 			ChunkBasicHeader{0, 2},
-			ChunkMessageHeader{0, 4, 5, 0},
+			ChunkMessageHeader{0, 8, 6, 0},
 			0,
 			[]byte{0, 76, 75, 64}},
 
 		{
 			ChunkBasicHeader{1, 2},
-			ChunkMessageHeader{0, 5, 6, 0},
+			ChunkMessageHeader{0, 8, 6, 0},
 			0,
-			[]byte{0, 76, 75, 64, 2}}}
+			[]byte{0, 76, 75, 64}}}
 	mockReader := MockReader{bytes}
 	conn := bufio.NewReadWriter(bufio.NewReader(&mockReader), bufio.NewWriter(&MockWriter{}))
 	cStreamer := ChunkStreamer{}
-	cStreamer.Init(conn, 256)
+	cStreamer.Init(conn, 4)
 	chunk1, err := cStreamer.ReadChunkFromStream()
 	if err != nil {
 		t.Fatalf("Error reading chunk1 in cStreamer: " + err.Error())

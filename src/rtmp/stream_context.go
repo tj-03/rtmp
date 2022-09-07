@@ -1,20 +1,28 @@
 package rtmp
 
 import (
-	"bufio"
 	"errors"
+	"net"
 	"sync"
 )
+
+//Stream context will be a pub sub object that will allow for different connections to create streams to send data to and receive data from. Each time a stream is written to,
+//the stream context will forward that data to all subscirbers of that stream
 
 //Currently testing using only one connection to the server so for now this will work HOWEVER, this is not thread safe with how rtmp.go uses it
 //Multiple goroutines could be read/writing the ClientStreams map and the Publishers map and this will cause a data race (map not thread safe)
 type Publisher struct {
 	subscriberLock sync.RWMutex
 	SessionId      int
-	Subscribers    []*bufio.ReadWriter
+	Subscribers    []Subscriber
 	//AMF0 Encoded Video MetaData
 	Metadata []byte
 }
+
+type Subscriber struct {
+	net.Conn
+}
+
 type Context struct {
 	publishersLock    sync.RWMutex
 	clientStreamsLock sync.RWMutex
@@ -35,19 +43,19 @@ func (ctx *Context) SetPublisher(streamName string, publisher *Publisher) {
 	ctx.publishersLock.Unlock()
 }
 
-func (publisher *Publisher) AddSubscriber(conn *bufio.ReadWriter) error {
+func (publisher *Publisher) AddSubscriber(conn net.Conn) error {
 	if conn == nil {
 		return errors.New("connection is nil")
 	}
 	publisher.subscriberLock.Lock()
-	publisher.Subscribers = append(publisher.Subscribers, conn)
+	publisher.Subscribers = append(publisher.Subscribers, Subscriber{Conn: conn})
 	publisher.subscriberLock.Unlock()
 	return nil
 }
 
-func (publisher *Publisher) GetSubscribers() []*bufio.ReadWriter {
+func (publisher *Publisher) GetSubscribers() []Subscriber {
 	publisher.subscriberLock.RLock()
-	subs := make([]*bufio.ReadWriter, 0, len(publisher.Subscribers))
+	subs := make([]Subscriber, 0, len(publisher.Subscribers))
 	copy(subs, publisher.Subscribers)
 	publisher.subscriberLock.RUnlock()
 	return subs

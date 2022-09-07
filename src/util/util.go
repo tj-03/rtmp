@@ -13,3 +13,17 @@ func Uint16ToBuf(num uint16) []byte {
 	binary.BigEndian.PutUint16(buf, num)
 	return buf
 }
+
+func Max(a int, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func Min(a int, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

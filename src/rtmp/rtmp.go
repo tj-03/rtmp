@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"errors"
-	"io"
+	"fmt"
 	"net"
 	"strconv"
 
@@ -12,10 +12,6 @@ import (
 	"github.com/tj03/rtmp/src/logger"
 	"github.com/tj03/rtmp/src/message"
 )
-
-//Stream context will be a pub sub object that will allow for different connections to create streams to send data to and receive data from. Each time a stream is written to,
-//the stream context will forward that data to all subscirbers of that stream
-//Subscribing to a stream will invole locking the entire map -> may consider using array instead of map
 
 var COMMAND_MESSAGE_CHUNK_STREAM = 3
 
@@ -27,8 +23,28 @@ type Server struct {
 }
 
 type Connection struct {
-	io.Closer
 	bufio.ReadWriter
+	net.Conn
+}
+
+type Test struct {
+	net.Conn
+}
+
+func (t Test) ReadByte() (byte, error) {
+	buf := make([]byte, 1)
+	_, err := t.Read(buf)
+	return buf[0], err
+}
+
+func (t Test) WriteByte(b byte) error {
+	buf := []byte{b}
+	_, err := t.Write(buf)
+	return err
+}
+
+func (t Test) Flush() error {
+	return nil
 }
 
 func (server *Server) Listen(port int) error {
@@ -45,9 +61,15 @@ func (server *Server) Listen(port int) error {
 		if err != nil {
 			return err
 		}
-		bufferedConnection := bufio.NewReadWriter(bufio.NewReader(tcpConnection), bufio.NewWriter(tcpConnection))
+		logger.InfoLog.Println("New connection!", tcpConnection.RemoteAddr().String())
+		fmt.Print("New conneciton", tcpConnection.RemoteAddr().String())
+		//If the buffer size is tool small bufio.Reader will fail to read messages with a payload close to the buffer size
+		//Not sure why
+		bufferSize := 4096 * 64
+		bufferedConnection := bufio.NewReadWriter(bufio.NewReaderSize(tcpConnection, bufferSize), bufio.NewWriter(tcpConnection))
+
 		//change this eventually -> we dont want to crash the whole server because of one failed connection
-		c := &Connection{tcpConnection, *bufferedConnection}
+		c := &Connection{*bufferedConnection, tcpConnection}
 
 		server.OnConnection(c)
 	}
@@ -75,11 +97,13 @@ type Session struct {
 	context         *Context
 	chunkSize       int
 	streamCount     int
+	playStream      chan message.Message
 	messageStreamer message.MessageStreamer
 }
 
 func (session *Session) HandleConnection(conn *Connection) error {
 	defer conn.Close()
+	session.playStream = make(chan message.Message, 256)
 	session.streamCount = 6
 	session.conn = conn
 	session.chunkSize = 128
@@ -93,34 +117,57 @@ func (session *Session) HandleConnection(conn *Connection) error {
 }
 
 func (session *Session) Run() error {
-	session.messageStreamer.Init(session.conn, session.chunkSize)
-
+	session.messageStreamer.Init(session.conn.ReadWriter, session.chunkSize)
+	defer session.conn.Close()
 	for {
 		msg, err := session.messageStreamer.ReadMessageFromStream()
 		if err != nil {
 			logger.ErrorLog.Println(err)
 			return err
 		}
-		logger.InfoLog.Println("New message", msg)
-		switch msg.MessageType {
-
-		case message.SetChunkSize:
-			session.handleSetChunkSize(msg.MessageData)
-
-		case message.CommandMsg0, message.CommandMsg3:
-			session.handleCommandMessage(msg.MessageData)
-
-		case message.DataMsg0:
-			session.handleDataMessage(msg.MessageData)
-
-		case message.Ack:
-			//session.messageStreamer.WriteMessageToStream(message.NewMessage([]byte{0, 6, 0, 0, 0, 0}, message.UserControl, 0))
-
-		default:
-			logger.ErrorLog.Fatalln("Unimplemented message type", msg.MessageType)
-		}
-		session.conn.Flush()
+		session.HandleMessage(msg)
 	}
+
+}
+
+func (session *Session) HandleMessage(msg message.Message) error {
+	b := 0
+	session.messageStreamer.WriteMessageToStream(message.NewAckMessage(uint32(b)))
+	b += 2000
+
+	previewSize := 32
+	if previewSize > len(msg.MessageData) {
+		previewSize = len(msg.MessageData)
+	}
+	if true || msg.MessageType != message.VideoMsg && msg.MessageType != message.AudioMsg {
+		logger.InfoLog.Println("New message", "Type: ", msg.MessageType, "StreamId: ", msg.MessageStreamId, "Length: ", len(msg.MessageData), msg.MessageData[:previewSize])
+	}
+	switch msg.MessageType {
+
+	case message.SetChunkSize:
+		session.handleSetChunkSize(msg.MessageData)
+
+	case message.CommandMsg0, message.CommandMsg3:
+		session.handleCommandMessage(msg.MessageData)
+
+	case message.DataMsg0:
+		session.handleDataMessage(msg.MessageData)
+
+	case message.AudioMsg:
+		session.handleAudioMessage(msg.MessageData)
+
+	case message.VideoMsg:
+		session.handleVideoMessage(msg.MessageData)
+
+	case message.Ack:
+		//session.messageStreamer.WriteMessageToStream(message.NewMessage([]byte{0, 6, 0, 0, 0, 0}, message.UserControl, 0))
+
+	default:
+		logger.ErrorLog.Fatalln("Unimplemented message type", msg.MessageType)
+	}
+	session.conn.Flush()
+	return nil
+
 }
 
 func (session *Session) handleSetChunkSize(data []byte) {
@@ -186,7 +233,7 @@ func (session *Session) handleConnectCommand(objects []interface{}) {
 	winAckMsg := message.NewWinAckMessage(5000000)
 	setBandwidthMsg := message.NewSetPeerBandwidthMessage(5000000, 2)
 	streamBeginMsg := message.NewStreamBeginMessage(0)
-	setChunkMsg := message.NewSetChunkSizeMessage(8192)
+	setChunkMsg := message.NewSetChunkSizeMessage(4096)
 
 	logger.InfoLog.Println("Writing window ack bytes to stream", winAckMsg)
 	session.messageStreamer.WriteMessageToStream(winAckMsg)
@@ -196,7 +243,7 @@ func (session *Session) handleConnectCommand(objects []interface{}) {
 
 	logger.InfoLog.Println("Writing set chunk size message", setChunkMsg)
 	session.messageStreamer.WriteMessageToStream(setChunkMsg)
-	session.messageStreamer.SetChunkSize(8192)
+	session.messageStreamer.SetChunkSize(4096)
 
 	logger.InfoLog.Println("Writing stream begin message")
 	session.messageStreamer.WriteMessageToStream(streamBeginMsg)
@@ -241,7 +288,7 @@ func (session *Session) handlePublishCommand(objects []interface{}) error {
 		return nil
 	}
 
-	session.context.Publishers[streamName] = &Publisher{SessionId: session.sessionId, Subscribers: []*bufio.ReadWriter{}, Metadata: nil}
+	session.context.Publishers[streamName] = &Publisher{SessionId: session.sessionId, Subscribers: []Subscriber{}, Metadata: nil}
 	//	session.context.SetPublisher(&Publisher{SessionId:session.sessionId, Subscribers:[]*bufio.ReadWriter{}, Metadata:nil})
 	session.messageStreamer.WriteMessageToStream(message.NewStatusMessage(
 		"status",
@@ -263,7 +310,10 @@ func (session *Session) handleDataMessage(data []byte) error {
 		if publisher, ok := session.context.Publishers[streamName]; ok {
 			publisher.Metadata = data
 			for _, subscriber := range publisher.Subscribers {
-				_, err := subscriber.Write(data)
+				_, err := subscriber.Conn.Write(data)
+				if err != nil {
+					return err
+				}
 				if err != nil {
 					return err
 				}
@@ -276,9 +326,37 @@ func (session *Session) handleDataMessage(data []byte) error {
 	return nil
 }
 
+func (session *Session) handleAudioMessage(data []byte) error {
+	if streamName, ok := session.context.ClientStreams[session.sessionId]; ok {
+		if publisher, ok := session.context.Publishers[streamName]; ok {
+			for _, subscriber := range publisher.Subscribers {
+				_, err := subscriber.Write(data)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (session *Session) handleVideoMessage(data []byte) error {
+	if streamName, ok := session.context.ClientStreams[session.sessionId]; ok {
+		if publisher, ok := session.context.Publishers[streamName]; ok {
+			for _, subscriber := range publisher.Subscribers {
+				_, err := subscriber.Write(data)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func (session *Session) CompleteHandshake() error {
 	//RTMPVersion := 3
-	conn := session.conn
+	conn := session.conn.ReadWriter
 
 	//read C0
 	clientVersion, err := conn.ReadByte()
@@ -291,7 +369,7 @@ func (session *Session) CompleteHandshake() error {
 	conn.Write(rando)
 	conn.Flush()
 	data := make([]byte, C1SIZE)
-	n, err := io.ReadFull(conn, data)
+	n, err := conn.Read(data)
 	if err != nil {
 		return err
 	}
@@ -300,13 +378,14 @@ func (session *Session) CompleteHandshake() error {
 	}
 	conn.Write(data)
 	conn.Flush()
-	n, err = io.ReadFull(conn, data)
+	n, err = conn.Read(data)
 	if err != nil {
 		return err
 	}
 	if n < len(data) {
 		return errors.New("failed to read handshake from client")
 	}
+	logger.InfoLog.Println("Handshake complete")
 	return nil
 
 }
