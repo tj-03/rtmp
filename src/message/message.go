@@ -88,6 +88,12 @@ func NewStreamBeginMessage(streamId uint32) Message {
 	return NewMessage(buf, UserControl, int(streamId), 2)
 }
 
+func NewStreamIsRecordedMessage(streamId uint32) Message {
+	buf := util.Uint16ToBuf(uint16(StreamIsRecorded))
+	buf = append(buf, util.Uint32ToBuf(streamId)...)
+	return NewMessage(buf, UserControl, int(streamId), 2)
+}
+
 func NewMessage(data []byte, msgTypeId MessageType, msgStreamId int, chunkStreamId int) Message {
 	return Message{msgTypeId, data, msgStreamId, chunkStreamId}
 }

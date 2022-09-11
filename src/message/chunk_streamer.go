@@ -122,7 +122,9 @@ func (cStreamer *ChunkStreamer) WriteChunksToStream(chunks []Chunk) error {
 	if err != nil {
 		return err
 	}
-	logger.InfoLog.Println("Writing chunk bytes to stream: ", data)
+	if chunks[0].BasicHeader.ChunkStreamId != 2 {
+		logger.InfoLog.Println("Writing chunk bytes to stream: ", data)
+	}
 	_, err = cStreamer.conn.Write(data)
 	if err != nil {
 		logger.ErrorLog.Fatalln(err)
@@ -133,14 +135,15 @@ func (cStreamer *ChunkStreamer) WriteChunksToStream(chunks []Chunk) error {
 	return nil
 }
 
-func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, error) {
+func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, int, error) {
 	chunkPayloadSize := cReader.ChunkSize
 	reader := cReader.conn
 	fmtCsid, err := reader.ReadByte()
 	format := uint8(fmtCsid >> 6)
 	csid := uint16(fmtCsid & 0b00111111)
+	bytesRead := 1
 	if err != nil {
-		return Chunk{}, err
+		return Chunk{}, bytesRead, err
 	}
 	var chunkBasicHeader ChunkBasicHeader
 	chunkBasicHeader.Fmt = format
@@ -150,14 +153,16 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, error) {
 		var id byte
 		id, err = reader.ReadByte()
 		csid = uint16(id + 64)
+		bytesRead++
 	//If 6 bit csid is 1, we have 2 byte csid (64 + 2 byte csid)
 	//this is wrong lol -> 3 byte calculation off, go to specs to see why
 	case 1:
 		data := make([]byte, 2)
 		n, err := reader.Read(data)
+		bytesRead += n
 		if err != nil {
 			logger.ErrorLog.Println(err)
-			return Chunk{}, err
+			return Chunk{}, 0, err
 		}
 		if n != 2 {
 			logger.ErrorLog.Println("Basic header read incorrectly - Supposed to read 2 - read", n)
@@ -165,7 +170,7 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, error) {
 		csid = 64 + binary.BigEndian.Uint16(data)
 	}
 	if err != nil {
-		return Chunk{}, err
+		return Chunk{}, 0, err
 	}
 	chunkBasicHeader.ChunkStreamId = uint64(csid)
 
@@ -176,8 +181,9 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, error) {
 		headerSize := 11
 		data := make([]byte, headerSize)
 		n, err := reader.Read(data)
+		bytesRead += n
 		if err != nil {
-			return Chunk{}, err
+			return Chunk{}, bytesRead, err
 		}
 		if n != headerSize {
 			logger.ErrorLog.Fatalln("Header read improperly", data, n)
@@ -195,8 +201,9 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, error) {
 		headerSize := 7
 		data := make([]byte, headerSize)
 		n, err := reader.Read(data)
+		bytesRead += n
 		if err != nil {
-			return Chunk{}, err
+			return Chunk{}, bytesRead, err
 		}
 		if n != headerSize {
 			logger.ErrorLog.Fatalln("Header read improperly", data, n)
@@ -215,8 +222,9 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, error) {
 		headerSize := 3
 		data := make([]byte, headerSize)
 		n, err := reader.Read(data)
+		bytesRead += n
 		if err != nil {
-			return Chunk{}, err
+			return Chunk{}, bytesRead, err
 		}
 		if n != headerSize {
 			logger.ErrorLog.Fatalln("Header read improperly", data, n)
@@ -259,13 +267,14 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, error) {
 
 	data := make([]byte, size)
 	n, err := reader.Read(data)
+	bytesRead += n
 	if err != nil {
-		return Chunk{}, err
+		return Chunk{}, bytesRead, err
 	}
 	if n != size {
 		panic("didnt read everything in chunk data")
 	}
 	chunk.ChunkData = data
-	return chunk, nil
+	return chunk, bytesRead, nil
 
 }

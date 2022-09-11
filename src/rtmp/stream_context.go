@@ -2,7 +2,6 @@ package rtmp
 
 import (
 	"errors"
-	"net"
 	"sync"
 )
 
@@ -16,39 +15,60 @@ type Publisher struct {
 	SessionId      int
 	Subscribers    []Subscriber
 	//AMF0 Encoded Video MetaData
-	Metadata []byte
+	Metadata          []byte
+	AACSequenceHeader []byte
 }
 
 type Subscriber struct {
-	net.Conn
+	StreamChannel chan MessageResult
+	SessionId     int
 }
 
 type Context struct {
 	publishersLock    sync.RWMutex
 	clientStreamsLock sync.RWMutex
-	ClientStreams     map[int]string
-	Publishers        map[string]*Publisher
+	clientStreams     map[int]string
+	waitLists         map[string][]Subscriber
+	publishers        map[string]*Publisher
 }
 
 func (ctx *Context) GetPublisher(streamName string) *Publisher {
 	ctx.publishersLock.RLock()
-	publisher := ctx.Publishers[streamName]
+	publisher := ctx.publishers[streamName]
 	ctx.publishersLock.RUnlock()
 	return publisher
 }
 
 func (ctx *Context) SetPublisher(streamName string, publisher *Publisher) {
 	ctx.publishersLock.Lock()
-	ctx.Publishers[streamName] = publisher
+	ctx.publishers[streamName] = publisher
+	waitList := ctx.waitLists[streamName]
+	if waitList != nil {
+		ctx.publishers[streamName].Subscribers = waitList
+		ctx.waitLists[streamName] = nil
+	}
 	ctx.publishersLock.Unlock()
 }
 
-func (publisher *Publisher) AddSubscriber(conn net.Conn) error {
-	if conn == nil {
-		return errors.New("connection is nil")
+func (ctx *Context) GetStreamName(sessionId int) (string, bool) {
+	ctx.clientStreamsLock.RLock()
+	streamName, ok := ctx.clientStreams[sessionId]
+	ctx.clientStreamsLock.RUnlock()
+	return streamName, ok
+}
+
+func (ctx *Context) SetStreamName(sessionId int, streamName string) {
+	ctx.publishersLock.Lock()
+	ctx.clientStreams[sessionId] = streamName
+	ctx.publishersLock.Unlock()
+}
+
+func (publisher *Publisher) AddSubscriber(channel chan MessageResult) error {
+	if channel == nil {
+		return errors.New("channel is nil")
 	}
 	publisher.subscriberLock.Lock()
-	publisher.Subscribers = append(publisher.Subscribers, Subscriber{Conn: conn})
+	publisher.Subscribers = append(publisher.Subscribers, Subscriber{StreamChannel: channel})
 	publisher.subscriberLock.Unlock()
 	return nil
 }

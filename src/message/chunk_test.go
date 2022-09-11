@@ -43,6 +43,41 @@ func TestChunkToBytes(t *testing.T) {
 
 }
 
+func TestChunkToBytesLongMessage(t *testing.T) {
+	chunks := []Chunk{
+		{
+			ChunkBasicHeader{0, 2},
+			ChunkMessageHeader{0, 8, 5, 0},
+			0,
+			[]byte{69, 69}},
+
+		{
+			ChunkBasicHeader{3, 2},
+			ChunkMessageHeader{0, 8, 6, 0},
+			0,
+			[]byte{69, 69}},
+		{
+			ChunkBasicHeader{3, 2},
+			ChunkMessageHeader{0, 8, 6, 0},
+			0,
+			[]byte{69, 69}},
+		{
+			ChunkBasicHeader{3, 2},
+			ChunkMessageHeader{0, 8, 6, 0},
+			0,
+			[]byte{69}}}
+	data, err := ChunksToBytes(chunks)
+	if err != nil {
+		t.Fatalf("Chunk parsing failed")
+	}
+	correct1 := []byte{2, 0, 0, 0, 0, 0, 8, 5, 0, 0, 0, 0, 69, 69, 11, 69, 69, 11, 69, 69, 11, 69}
+	if !cmpSlice(data, correct1) {
+		fmt.Println(data)
+		t.Fatalf("Incorrect")
+	}
+
+}
+
 type MockReader struct {
 	Data []byte
 }
@@ -93,11 +128,11 @@ func TestBytesToChunk(t *testing.T) {
 	conn := bufio.NewReadWriter(bufio.NewReader(&mockReader), bufio.NewWriter(&MockWriter{}))
 	cStreamer := ChunkStreamer{}
 	cStreamer.Init(conn, 4)
-	chunk1, err := cStreamer.ReadChunkFromStream()
+	chunk1, _, err := cStreamer.ReadChunkFromStream()
 	if err != nil {
 		t.Fatalf("Error reading chunk1 in cStreamer: " + err.Error())
 	}
-	chunk2, err := cStreamer.ReadChunkFromStream()
+	chunk2, _, err := cStreamer.ReadChunkFromStream()
 	if err != nil {
 		t.Fatalf("Error reading chunk2 in cStreamer:" + err.Error())
 	}

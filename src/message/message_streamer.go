@@ -7,18 +7,26 @@ import (
 )
 
 type MessageStreamer struct {
-	MessageStreams map[int]int
-	chunkStreamer  ChunkStreamer
+	MessageStreams   map[int]int
+	chunkStreamer    ChunkStreamer
+	MaxWindowAckSize int
+	bytesRead        int
+	cache            map[int]ChunkMessageHeader
 }
 
-var t uint64
+var t uint32
 
-func createTimestamp() uint64 {
+func createTimestamp() uint32 {
 	t += 200
-	return 0
+	return uint32(66)
 }
 
 //Command Messages
+
+func (mStreamer *MessageStreamer) Init(conn Connection, chunkSize int) {
+	mStreamer.chunkStreamer.Init(conn, chunkSize)
+	mStreamer.MessageStreams = make(map[int]int)
+}
 
 func (mStreamer *MessageStreamer) NewChunksFromMessage(msg Message) ([]Chunk, error) {
 	data := msg.MessageData
@@ -35,10 +43,10 @@ func (mStreamer *MessageStreamer) NewChunksFromMessage(msg Message) ([]Chunk, er
 		} else {
 			size = chunkSize
 		}
-		chunksLength := len(chunks)
+		//chunksLength := len(chunks)
 		var format int
 		messageHeader := ChunkMessageHeader{}
-		if chunksLength > 0 {
+		if false {
 			format = 3
 			messageHeader = chunks[0].MessageHeader
 		} else {
@@ -51,7 +59,9 @@ func (mStreamer *MessageStreamer) NewChunksFromMessage(msg Message) ([]Chunk, er
 			}
 		}
 		basicHeader := ChunkBasicHeader{uint8(format), uint64(chunkStreamId)}
-
+		if msg.MessageType == VideoMsg {
+			mStreamer.cache[chunkStreamId] = messageHeader
+		}
 		data = data[cur : cur+size]
 		cur += size
 
@@ -59,11 +69,6 @@ func (mStreamer *MessageStreamer) NewChunksFromMessage(msg Message) ([]Chunk, er
 		chunks = append(chunks, chunk)
 	}
 	return chunks, nil
-}
-
-func (mStreamer *MessageStreamer) Init(conn Connection, chunkSize int) {
-	mStreamer.chunkStreamer.Init(conn, chunkSize)
-	mStreamer.MessageStreams = make(map[int]int)
 }
 
 func (mStreamer *MessageStreamer) SetChunkSize(chunkSize int) {
@@ -81,7 +86,8 @@ func (mStreamer *MessageStreamer) WriteMessageToStream(msg Message) error {
 //dont know if i should demultiplex message streams - dont understand the point of them
 func (mStreamer *MessageStreamer) ReadMessageFromStream() (Message, error) {
 	cStreamer := mStreamer.chunkStreamer
-	chunk, err := cStreamer.ReadChunkFromStream()
+	chunk, n, err := cStreamer.ReadChunkFromStream()
+	mStreamer.bytesRead += n
 	if err != nil {
 		return Message{}, err
 	}
@@ -92,13 +98,18 @@ func (mStreamer *MessageStreamer) ReadMessageFromStream() (Message, error) {
 	message.MessageData = append(message.MessageData, chunk.ChunkData...)
 
 	for msgLength > len(message.MessageData) {
-		chunk, err = cStreamer.ReadChunkFromStream()
+		chunk, n, err := cStreamer.ReadChunkFromStream()
+		mStreamer.bytesRead += n
 		fmt.Println("Read chunk")
 		if err != nil {
 			return message, err
 		}
 
 		message.MessageData = append(message.MessageData, chunk.ChunkData...)
+	}
+	if mStreamer.MaxWindowAckSize > 0 && mStreamer.bytesRead >= mStreamer.MaxWindowAckSize {
+		mStreamer.WriteMessageToStream(NewAckMessage(uint32(mStreamer.bytesRead)))
+		mStreamer.bytesRead = 0
 	}
 	previewSize := len(message.MessageData)
 	if previewSize > 32 {
