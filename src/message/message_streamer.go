@@ -2,8 +2,10 @@ package message
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/tj03/rtmp/src/logger"
+	"github.com/tj03/rtmp/src/util"
 )
 
 type MessageStreamer struct {
@@ -18,7 +20,7 @@ var t uint32
 
 func createTimestamp() uint32 {
 	t += 200
-	return uint32(66)
+	return uint32(time.Now().UnixMilli())
 }
 
 //Command Messages
@@ -26,20 +28,29 @@ func createTimestamp() uint32 {
 func (mStreamer *MessageStreamer) Init(conn Connection, chunkSize int) {
 	mStreamer.chunkStreamer.Init(conn, chunkSize)
 	mStreamer.MessageStreams = make(map[int]int)
+
 }
 
+func verifyChunks(chunks []Chunk, msg Message) bool {
+	acc := []byte{}
+	for _, chunk := range chunks {
+		acc = append(acc, chunk.ChunkData...)
+	}
+	return util.CmpSlice(acc, msg.MessageData)
+}
 func (mStreamer *MessageStreamer) NewChunksFromMessage(msg Message) ([]Chunk, error) {
-	data := msg.MessageData
-	originalSize := len(data)
+	data := []byte{}
+	originalSize := len(msg.MessageData)
 	var size int
 	cur := 0
 	chunkSize := mStreamer.chunkStreamer.ChunkSize
 	chunks := []Chunk{}
 	chunkStreamId := msg.ChunkStreamId
 
-	for cur < len(data) {
-		if chunkSize > len(data) {
-			size = len(data) - cur
+	for cur < originalSize {
+		remainingSize := originalSize - cur
+		if chunkSize > remainingSize {
+			size = remainingSize
 		} else {
 			size = chunkSize
 		}
@@ -59,15 +70,24 @@ func (mStreamer *MessageStreamer) NewChunksFromMessage(msg Message) ([]Chunk, er
 			}
 		}
 		basicHeader := ChunkBasicHeader{uint8(format), uint64(chunkStreamId)}
-		if msg.MessageType == VideoMsg {
+		if false && msg.MessageType == VideoMsg {
 			mStreamer.cache[chunkStreamId] = messageHeader
 		}
-		data = data[cur : cur+size]
+		data = msg.MessageData[cur : cur+size]
 		cur += size
 
 		chunk := Chunk{basicHeader, messageHeader, 0, data}
 		chunks = append(chunks, chunk)
 	}
+	// if !verifyChunks(chunks, msg) {
+	// 	cData := []byte{}
+	// 	for _, c := range chunks {
+	// 		cData = append(cData, c.ChunkData...)
+	// 	}
+	// 	logger.ErrorLog.Println("Bad chunk->message conv: Message Len: ", len(msg.MessageData), "Msg dat: ", MessageToString(msg, true))
+	// 	logger.ErrorLog.Println("Bad chunk->message conv: Chunk len: ", len(cData), "Chunk dat:", cData)
+	// 	panic("Bad message to chunk conversion: " + MessageToString(msg, false))
+	// }
 	return chunks, nil
 }
 
@@ -83,7 +103,6 @@ func (mStreamer *MessageStreamer) WriteMessageToStream(msg Message) error {
 	return mStreamer.chunkStreamer.WriteChunksToStream(chunks)
 }
 
-//dont know if i should demultiplex message streams - dont understand the point of them
 func (mStreamer *MessageStreamer) ReadMessageFromStream() (Message, error) {
 	cStreamer := mStreamer.chunkStreamer
 	chunk, n, err := cStreamer.ReadChunkFromStream()

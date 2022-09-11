@@ -15,6 +15,7 @@ func DecodeAMF0(v []byte) (interface{}, error) {
 }
 
 func decodeAMF0(v []byte) (interface{}, int, error) {
+
 	switch v[0] {
 	case amf0Number:
 		return decodeNumber(v)

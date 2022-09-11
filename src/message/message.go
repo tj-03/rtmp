@@ -1,12 +1,22 @@
 package message
 
 import (
+	"fmt"
+
 	"github.com/tj03/rtmp/src/amf"
 	"github.com/tj03/rtmp/src/util"
 )
 
 type MessageType int
 type EventType int
+
+func MessageToString(msg Message, fullMsg bool) string {
+	previewSize := 32
+	if fullMsg {
+		previewSize = len(msg.MessageData)
+	}
+	return fmt.Sprintln("New message", "Type: ", msg.MessageType, "StreamId: ", msg.MessageStreamId, "Length: ", len(msg.MessageData), msg.MessageData[:previewSize])
+}
 
 const (
 	SetChunkSize MessageType = iota + 1

@@ -4,19 +4,10 @@ import (
 	"bufio"
 	"fmt"
 	"testing"
+
+	"github.com/tj03/rtmp/src/util"
 )
 
-func cmpSlice(data1 []byte, data2 []byte) bool {
-	if len(data1) != len(data2) {
-		return false
-	}
-	for i := range data1 {
-		if data1[i] != data2[i] {
-			return false
-		}
-	}
-	return true
-}
 func TestChunkToBytes(t *testing.T) {
 	chunks := []Chunk{
 		{
@@ -36,7 +27,7 @@ func TestChunkToBytes(t *testing.T) {
 	}
 	correct1 := []byte{2, 0, 0, 0, 0, 0, 4, 5, 0, 0, 0, 0, 0, 76, 75, 64}
 	correct2 := []byte{66, 0, 0, 0, 0, 0, 5, 6, 0, 76, 75, 64, 2}
-	if !cmpSlice(data, append(correct1, correct2...)) {
+	if !util.CmpSlice(data, append(correct1, correct2...)) {
 		fmt.Println(data)
 		t.Fatalf("Incorrect")
 	}
@@ -71,7 +62,7 @@ func TestChunkToBytesLongMessage(t *testing.T) {
 		t.Fatalf("Chunk parsing failed")
 	}
 	correct1 := []byte{2, 0, 0, 0, 0, 0, 8, 5, 0, 0, 0, 0, 69, 69, 11, 69, 69, 11, 69, 69, 11, 69}
-	if !cmpSlice(data, correct1) {
+	if !util.CmpSlice(data, correct1) {
 		fmt.Println(data)
 		t.Fatalf("Incorrect")
 	}
@@ -104,7 +95,7 @@ func cmpChunks(c1 Chunk, c2 Chunk) bool {
 	return c1.BasicHeader == c2.BasicHeader &&
 		c2.MessageHeader == c1.MessageHeader &&
 		c1.ExtendedTimestamp == c2.ExtendedTimestamp &&
-		cmpSlice(c1.ChunkData, c2.ChunkData)
+		util.CmpSlice(c1.ChunkData, c2.ChunkData)
 
 }
 

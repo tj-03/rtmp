@@ -67,10 +67,11 @@ func ChunksToBytes(chunks []Chunk) ([]byte, error) {
 		return nil, errors.New("empty chunks")
 	}
 	bytes := []byte{}
+	messageLength := chunks[0].MessageHeader.MessageLength
+	messageTypeId := byte(chunks[0].MessageHeader.MessageTypeId)
+	messageStreamId := uint32(chunks[0].MessageHeader.MessageStreamId)
+
 	for _, chunk := range chunks {
-		messageLength := chunk.MessageHeader.MessageLength
-		messageTypeId := byte(chunk.MessageHeader.MessageTypeId)
-		messageStreamId := uint32(chunk.MessageHeader.MessageStreamId)
 
 		encodedChunk := []byte{}
 		format := chunk.BasicHeader.Fmt
@@ -122,9 +123,7 @@ func (cStreamer *ChunkStreamer) WriteChunksToStream(chunks []Chunk) error {
 	if err != nil {
 		return err
 	}
-	if chunks[0].BasicHeader.ChunkStreamId != 2 {
-		logger.InfoLog.Println("Writing chunk bytes to stream: ", data)
-	}
+
 	_, err = cStreamer.conn.Write(data)
 	if err != nil {
 		logger.ErrorLog.Fatalln(err)

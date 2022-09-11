@@ -5,18 +5,16 @@ import (
 	"sync"
 )
 
-//Stream context will be a pub sub object that will allow for different connections to create streams to send data to and receive data from. Each time a stream is written to,
-//the stream context will forward that data to all subscirbers of that stream
-
-//Currently testing using only one connection to the server so for now this will work HOWEVER, this is not thread safe with how rtmp.go uses it
-//Multiple goroutines could be read/writing the ClientStreams map and the Publishers map and this will cause a data race (map not thread safe)
+//Holds data about the publisher and associated subscribers and provides methods to read/write via RWMutex.
 type Publisher struct {
 	subscriberLock sync.RWMutex
 	SessionId      int
 	Subscribers    []Subscriber
 	//AMF0 Encoded Video MetaData
-	Metadata          []byte
+	Metadata []byte
+	//AAC and AVC sequence headers MUST be sent to subscriber before sending any video/audio data
 	AACSequenceHeader []byte
+	AVCSequenceHeader []byte
 }
 
 type Subscriber struct {
@@ -24,12 +22,16 @@ type Subscriber struct {
 	SessionId     int
 }
 
+//Context holds information about different RTMP sessions to enable different sessions to communicate with each other via channels.
+//Provides methods to read/write data using RWMutex.
 type Context struct {
 	publishersLock    sync.RWMutex
 	clientStreamsLock sync.RWMutex
+	waitListLock      sync.Mutex
 	clientStreams     map[int]string
-	waitLists         map[string][]Subscriber
-	publishers        map[string]*Publisher
+	//Sessions wait here when a stream is not yet published.
+	waitLists  map[string][]Subscriber
+	publishers map[string]*Publisher
 }
 
 func (ctx *Context) GetPublisher(streamName string) *Publisher {
@@ -42,11 +44,13 @@ func (ctx *Context) GetPublisher(streamName string) *Publisher {
 func (ctx *Context) SetPublisher(streamName string, publisher *Publisher) {
 	ctx.publishersLock.Lock()
 	ctx.publishers[streamName] = publisher
+	ctx.waitListLock.Lock()
 	waitList := ctx.waitLists[streamName]
 	if waitList != nil {
 		ctx.publishers[streamName].Subscribers = waitList
 		ctx.waitLists[streamName] = nil
 	}
+	ctx.waitListLock.Unlock()
 	ctx.publishersLock.Unlock()
 }
 
@@ -61,6 +65,17 @@ func (ctx *Context) SetStreamName(sessionId int, streamName string) {
 	ctx.publishersLock.Lock()
 	ctx.clientStreams[sessionId] = streamName
 	ctx.publishersLock.Unlock()
+}
+
+func (ctx *Context) AppendToWaitlist(streamName string, subscriber Subscriber) {
+	ctx.waitListLock.Lock()
+	waitList := ctx.waitLists[streamName]
+	if waitList == nil {
+		waitList = make([]Subscriber, 0)
+	}
+	waitList = append(waitList, subscriber)
+	ctx.waitLists[streamName] = waitList
+	ctx.waitListLock.Unlock()
 }
 
 func (publisher *Publisher) AddSubscriber(channel chan MessageResult) error {

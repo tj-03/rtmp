@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strconv"
 
 	"github.com/tj03/rtmp/src/amf"
 	"github.com/tj03/rtmp/src/logger"
@@ -21,7 +20,7 @@ var DATA_MESSAGE_CHUNK_STREAM = 8
 type Server struct {
 	//change to arr?
 	sessions     map[int]*Session
-	context      Context
+	context      *Context
 	sessionCount int
 }
 
@@ -30,6 +29,7 @@ type Connection struct {
 	net.Conn
 }
 
+//Dummy connection struct for testing. Implements ByteReader/Writer and Flush
 type Test struct {
 	net.Conn
 }
@@ -50,42 +50,51 @@ func (t Test) Flush() error {
 	return nil
 }
 
+//Initializes server fields and returns server
+func NewRTMPServer() Server {
+	server := Server{}
+	server.sessions = make(map[int]*Session)
+	server.context = &Context{}
+	server.context.clientStreams = make(map[int]string)
+	server.context.publishers = map[string]*Publisher{}
+	server.context.waitLists = map[string][]Subscriber{}
+	return server
+}
+
 func (server *Server) Listen(port int) error {
-	tcpSocket, err := net.Listen("tcp", ":"+strconv.FormatInt(int64(port), 10))
+	tcpSocket, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		logger.ErrorLog.Println(err)
 		return err
 	}
 	defer tcpSocket.Close()
 	logger.InfoLog.Println("Listening on port", port)
-	server.sessions = make(map[int]*Session)
-	server.context.clientStreams = make(map[int]string)
-	server.context.publishers = map[string]*Publisher{}
-	server.context.waitLists = map[string][]Subscriber{}
 	for {
 		tcpConnection, err := tcpSocket.Accept()
 		if err != nil {
 			return err
 		}
 		logger.InfoLog.Println("New connection!", tcpConnection.RemoteAddr().String())
-		fmt.Print("New conneciton", tcpConnection.RemoteAddr().String())
-		//If the buffer size is tool small bufio.Reader will fail to read messages with a payload close to the buffer size
+		fmt.Println("New conneciton", tcpConnection.RemoteAddr().String())
+
+		//If the buffer size is too small bufio.Reader will fail to read messages with a payload close to the buffer size
 		//Not sure why
 		bufferSize := 4096 * 64
 		bufferedConnection := bufio.NewReadWriter(bufio.NewReaderSize(tcpConnection, bufferSize), bufio.NewWriter(tcpConnection))
 
 		c := &Connection{*bufferedConnection, tcpConnection}
 
-		server.OnConnection(c)
+		server.onConnection(c)
 	}
 }
 
-func (server *Server) OnConnection(c *Connection) {
-	server.sessions[server.sessionCount] = &Session{context: &server.context, sessionId: server.sessionCount}
+func (server *Server) onConnection(c *Connection) {
+	server.sessions[server.sessionCount] = &Session{context: server.context, sessionId: server.sessionCount}
 	go server.sessions[server.sessionCount].HandleConnection(c)
 	server.sessionCount++
 }
 
+//Session state enum. Only used for disconnect state currently. Will eventually add publishing, playing etc. states.
 type RTMPSessionState int
 
 const (
@@ -93,6 +102,7 @@ const (
 	Connected
 )
 
+//Represents a RTMP session with a client.
 type Session struct {
 	conn            *Connection
 	sessionId       int
@@ -111,26 +121,10 @@ type MessageResult struct {
 	Err     error
 }
 
-func (session *Session) ReadMessages() {
-	for {
-		msg, err := session.messageStreamer.ReadMessageFromStream()
-		//Any write operations to the message streamer must be handled here to avoid data race
-		switch msg.MessageType {
-		case rtmpMsg.SetChunkSize:
-			session.handleSetChunkSize(msg.MessageData)
-			continue
-		case rtmpMsg.WindowAckSize:
-			session.messageStreamer.MaxWindowAckSize = int(binary.BigEndian.Uint32(msg.MessageData[:4]))
-			continue
-		}
-		session.messageChannel <- MessageResult{msg, err}
-	}
-}
-
 func (session *Session) HandleConnection(conn *Connection) error {
 	defer session.disconnect()
 	session.messageChannel = make(chan MessageResult, 4)
-	session.streamChannel = make(chan MessageResult, 4)
+	session.streamChannel = make(chan MessageResult, 4096*4)
 	session.streamCount = 6
 	session.conn = conn
 	session.chunkSize = 128
@@ -169,6 +163,22 @@ func (session *Session) Run() error {
 
 }
 
+func (session *Session) ReadMessages() {
+	for {
+		msg, err := session.messageStreamer.ReadMessageFromStream()
+		//Any write operations to the message streamer must be handled here to avoid data race
+		switch msg.MessageType {
+		case rtmpMsg.SetChunkSize:
+			session.handleSetChunkSize(msg.MessageData)
+			continue
+		case rtmpMsg.WindowAckSize:
+			session.messageStreamer.MaxWindowAckSize = int(binary.BigEndian.Uint32(msg.MessageData[:4]))
+			continue
+		}
+		session.messageChannel <- MessageResult{msg, err}
+	}
+}
+
 func (session *Session) HandleMessage(msg rtmpMsg.Message) error {
 	b := 0
 	b += 2000
@@ -181,13 +191,9 @@ func (session *Session) HandleMessage(msg rtmpMsg.Message) error {
 		logger.InfoLog.Println("New message", "Type: ", msg.MessageType, "StreamId: ", msg.MessageStreamId, "Length: ", len(msg.MessageData), msg.MessageData[:previewSize])
 	}
 	switch msg.MessageType {
-	case 0:
-		logger.ErrorLog.Println("Message type 0 tf?")
-	case rtmpMsg.SetChunkSize:
-		session.handleSetChunkSize(msg.MessageData)
 
-	case rtmpMsg.WindowAckSize:
-		session.messageStreamer.MaxWindowAckSize = int(binary.BigEndian.Uint32(msg.MessageData[:4]))
+	case 0:
+		logger.ErrorLog.Println("Message type 0")
 
 	case rtmpMsg.UserControl:
 		logger.WarningLog.Println("User control Message Sent - Unhandled")
@@ -205,7 +211,6 @@ func (session *Session) HandleMessage(msg rtmpMsg.Message) error {
 		session.handleVideoMessage(msg.MessageData)
 
 	case rtmpMsg.Ack:
-		//session.messageStreamer.WriteMessageToStream(message.NewMessage([]byte{0, 6, 0, 0, 0, 0}, message.UserControl, 0))
 
 	default:
 		logger.ErrorLog.Fatalln("Unimplemented message type", msg.MessageType)
@@ -232,6 +237,7 @@ func (session *Session) handleCommandMessage(data []byte) error {
 	amfObjects, _, _ := amf.DecodeBytes(data)
 	if len(amfObjects) == 0 {
 		logger.InfoLog.Fatalln("No objects decoded")
+		return errors.New("no objects decoded")
 	}
 	commandName, ok := amfObjects[0].(string)
 	if !ok {
@@ -314,10 +320,11 @@ func (session *Session) handleCreateStreamCommand(objects []interface{}) error {
 		responseData = amf.EncodeAMF0("_error", -1, nil, "No transaction Id given")
 	} else {
 		responseData = amf.EncodeAMF0("_result", transactionId, nil, session.streamCount)
-		session.streamCount++
+		//session.streamCount++
 	}
 
 	cmdMsg := rtmpMsg.NewCommandMessage0(responseData, 0, COMMAND_MESSAGE_CHUNK_STREAM)
+	logger.InfoLog.Println("Sending create stream response.")
 	session.messageStreamer.WriteMessageToStream(cmdMsg)
 	return nil
 }
@@ -332,23 +339,22 @@ func (session *Session) handlePlayCommand(objects []interface{}) error {
 	}
 	publisher := session.context.GetPublisher(streamName)
 	if publisher == nil {
-		session.context.waitLists[streamName] = append(session.context.waitLists[streamName], Subscriber{session.streamChannel, session.sessionId})
-		//do we return error here or wait until stream exists
-		return errors.New("stream does not exist")
+		session.context.AppendToWaitlist(streamName, Subscriber{session.streamChannel, session.sessionId})
+		return nil
 	}
 	session.messageStreamer.WriteMessageToStream(rtmpMsg.NewSetChunkSizeMessage(4096))
 	session.messageStreamer.SetChunkSize(4096)
-	session.messageStreamer.WriteMessageToStream(rtmpMsg.NewStreamIsRecordedMessage(uint32(session.streamCount - 1)))
-	session.messageStreamer.WriteMessageToStream(rtmpMsg.NewStreamBeginMessage(uint32(session.streamCount) - 1))
-	playStartMsg := rtmpMsg.NewStatusMessage("status", "NetStream.Play.Reset", "Playing and resetting stream", session.streamCount-1)
-	playReset := rtmpMsg.NewStatusMessage("status", "NetStream.Play.Start", "Started playing stream.", session.streamCount-1)
+	session.messageStreamer.WriteMessageToStream(rtmpMsg.NewStreamIsRecordedMessage(uint32(session.streamCount)))
+	session.messageStreamer.WriteMessageToStream(rtmpMsg.NewStreamBeginMessage(uint32(session.streamCount)))
+	playStartMsg := rtmpMsg.NewStatusMessage("status", "NetStream.Play.Reset", "Playing and resetting stream", session.streamCount)
+	playReset := rtmpMsg.NewStatusMessage("status", "NetStream.Play.Start", "Started playing stream.", session.streamCount)
 	if true {
 		session.messageStreamer.WriteMessageToStream(playReset)
 	}
 	session.messageStreamer.WriteMessageToStream(playStartMsg)
 
 	publisher.AddSubscriber(session.streamChannel)
-	metaDataMsg := rtmpMsg.NewMessage(publisher.Metadata, rtmpMsg.DataMsg0, session.streamCount-1, COMMAND_MESSAGE_CHUNK_STREAM)
+	metaDataMsg := rtmpMsg.NewMessage(publisher.Metadata, rtmpMsg.DataMsg0, session.streamCount, COMMAND_MESSAGE_CHUNK_STREAM)
 	session.messageStreamer.WriteMessageToStream(metaDataMsg)
 
 	return nil
@@ -393,8 +399,7 @@ func (session *Session) handleDataMessage(data []byte) error {
 		//handle bad data message
 		return nil
 	}
-	buf := amf.EncodeAMF0("onMetaData")
-	buf = append(buf, amf.EncodeAMF0(buf[2])...)
+	buf := amf.EncodeAMF0("onMetaData", objs[2])
 	dataMsg := rtmpMsg.NewCommandMessage0(buf, 0, COMMAND_MESSAGE_CHUNK_STREAM)
 	session.ClientMetadata = data
 	logger.InfoLog.Println("Data message received. AMF?:", objs)
@@ -418,8 +423,9 @@ func (session *Session) handleDataMessage(data []byte) error {
 func (session *Session) handleAudioMessage(data []byte) error {
 	if streamName, ok := session.context.GetStreamName(session.sessionId); ok {
 		if publisher := session.context.GetPublisher(streamName); publisher != nil {
-			for _, subscriber := range publisher.Subscribers {
-				msg := rtmpMsg.NewMessage(data, rtmpMsg.AudioMsg, session.streamCount-1, AUDIO_MESSAGE_CHUNK_STREAM)
+			for i := range publisher.Subscribers {
+				subscriber := publisher.Subscribers[i]
+				msg := rtmpMsg.NewMessage(data, rtmpMsg.AudioMsg, session.streamCount, AUDIO_MESSAGE_CHUNK_STREAM)
 				select {
 				case subscriber.StreamChannel <- MessageResult{msg, nil}:
 				default:
@@ -434,8 +440,9 @@ func (session *Session) handleAudioMessage(data []byte) error {
 func (session *Session) handleVideoMessage(data []byte) error {
 	if streamName, ok := session.context.GetStreamName(session.sessionId); ok {
 		if publisher := session.context.GetPublisher(streamName); publisher != nil {
-			for _, subscriber := range publisher.Subscribers {
-				msg := rtmpMsg.NewMessage(data, rtmpMsg.VideoMsg, session.streamCount-1, VIDEO_MESSAGE_CHUNK_STREAM)
+			for i := range publisher.Subscribers {
+				subscriber := publisher.Subscribers[i]
+				msg := rtmpMsg.NewMessage(data, rtmpMsg.VideoMsg, session.streamCount, VIDEO_MESSAGE_CHUNK_STREAM)
 				select {
 				case subscriber.StreamChannel <- MessageResult{msg, nil}:
 				default:
@@ -449,8 +456,8 @@ func (session *Session) handleVideoMessage(data []byte) error {
 
 func (session *Session) disconnect() {
 	session.state = Disconnected
-	close(session.messageChannel)
-	close(session.streamChannel)
+	//close(session.messageChannel)
+	//close(session.streamChannel)
 	session.conn.Close()
 	logger.InfoLog.Printf("Session %d disconnected", session.sessionId)
 }
