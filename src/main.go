@@ -1,6 +1,8 @@
 package main
 
 import (
+	_ "net/http/pprof"
+
 	rtmp "github.com/tj03/rtmp/src/rtmp"
 )
 
@@ -14,4 +16,5 @@ func main() {
 	// return
 	s := rtmp.NewRTMPServer()
 	s.Listen(8080)
+
 }

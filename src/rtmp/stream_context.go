@@ -8,6 +8,8 @@ import (
 //Holds data about the publisher and associated subscribers and provides methods to read/write via RWMutex.
 type Publisher struct {
 	subscriberLock sync.RWMutex
+	aacHeaderLock  sync.RWMutex
+	avcHeaderLock  sync.RWMutex
 	SessionId      int
 	Subscribers    []Subscriber
 	//AMF0 Encoded Video MetaData
@@ -94,4 +96,38 @@ func (publisher *Publisher) GetSubscribers() []Subscriber {
 	copy(subs, publisher.Subscribers)
 	publisher.subscriberLock.RUnlock()
 	return subs
+}
+
+func (publisher *Publisher) SetAACSequenceHeader(seqHeader []byte) {
+	publisher.aacHeaderLock.Lock()
+	publisher.AACSequenceHeader = seqHeader
+	publisher.aacHeaderLock.Unlock()
+}
+
+func (publisher *Publisher) GetAACSequenceHeader() []byte {
+	if publisher.AACSequenceHeader == nil {
+		return nil
+	}
+	publisher.aacHeaderLock.RLock()
+	seqHeaderCopy := make([]byte, len(publisher.AACSequenceHeader))
+	copy(seqHeaderCopy, publisher.AACSequenceHeader)
+	publisher.aacHeaderLock.RUnlock()
+	return seqHeaderCopy
+}
+
+func (publisher *Publisher) SetAVCSequenceHeader(seqHeader []byte) {
+	publisher.avcHeaderLock.Lock()
+	publisher.AVCSequenceHeader = seqHeader
+	publisher.avcHeaderLock.Unlock()
+}
+
+func (publisher *Publisher) GetAVCSequenceHeader() []byte {
+	if publisher.AVCSequenceHeader == nil {
+		return nil
+	}
+	publisher.avcHeaderLock.RLock()
+	seqHeaderCopy := make([]byte, len(publisher.AVCSequenceHeader))
+	copy(seqHeaderCopy, publisher.AVCSequenceHeader)
+	publisher.avcHeaderLock.RUnlock()
+	return seqHeaderCopy
 }

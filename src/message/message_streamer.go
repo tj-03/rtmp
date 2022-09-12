@@ -1,7 +1,6 @@
 package message
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/tj03/rtmp/src/logger"
@@ -119,7 +118,7 @@ func (mStreamer *MessageStreamer) ReadMessageFromStream() (Message, error) {
 	for msgLength > len(message.MessageData) {
 		chunk, n, err := cStreamer.ReadChunkFromStream()
 		mStreamer.bytesRead += n
-		fmt.Println("Read chunk")
+		//fmt.Println("Read chunk")
 		if err != nil {
 			return message, err
 		}

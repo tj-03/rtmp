@@ -95,12 +95,12 @@ func (server *Server) onConnection(c *Connection) {
 }
 
 //Session state enum. Only used for disconnect state currently. Will eventually add publishing, playing etc. states.
-type RTMPSessionState int
-
-const (
-	Disconnected RTMPSessionState = iota
-	Connected
-)
+type RTMPSessionState struct {
+	Connected bool
+	Playing   bool
+	Paused    bool
+	Published bool
+}
 
 //Represents a RTMP session with a client.
 type Session struct {
@@ -124,7 +124,7 @@ type MessageResult struct {
 func (session *Session) HandleConnection(conn *Connection) error {
 	defer session.disconnect()
 	session.messageChannel = make(chan MessageResult, 4)
-	session.streamChannel = make(chan MessageResult, 4096*4)
+	session.streamChannel = make(chan MessageResult, 4)
 	session.streamCount = 6
 	session.conn = conn
 	session.chunkSize = 128
@@ -180,20 +180,10 @@ func (session *Session) ReadMessages() {
 }
 
 func (session *Session) HandleMessage(msg rtmpMsg.Message) error {
-	b := 0
-	b += 2000
-
-	previewSize := 32
-	if previewSize > len(msg.MessageData) {
-		previewSize = len(msg.MessageData)
-	}
-	if msg.MessageType != rtmpMsg.VideoMsg && msg.MessageType != rtmpMsg.AudioMsg {
-		logger.InfoLog.Println("New message", "Type: ", msg.MessageType, "StreamId: ", msg.MessageStreamId, "Length: ", len(msg.MessageData), msg.MessageData[:previewSize])
-	}
 	switch msg.MessageType {
 
 	case 0:
-		logger.ErrorLog.Println("Message type 0")
+		//logger.ErrorLog.Println("Message type 0")
 
 	case rtmpMsg.UserControl:
 		logger.WarningLog.Println("User control Message Sent - Unhandled")
@@ -304,7 +294,7 @@ func (session *Session) handleConnectCommand(objects []interface{}) {
 	resMsg := rtmpMsg.NewCommandMessage0(response, 0, COMMAND_MESSAGE_CHUNK_STREAM)
 	logger.InfoLog.Println("Writing connect response", resMsg)
 	session.messageStreamer.WriteMessageToStream(resMsg)
-	session.state = Connected
+	session.state.Connected = true
 }
 
 func (session *Session) handleCreateStreamCommand(objects []interface{}) error {
@@ -356,6 +346,14 @@ func (session *Session) handlePlayCommand(objects []interface{}) error {
 	publisher.AddSubscriber(session.streamChannel)
 	metaDataMsg := rtmpMsg.NewMessage(publisher.Metadata, rtmpMsg.DataMsg0, session.streamCount, COMMAND_MESSAGE_CHUNK_STREAM)
 	session.messageStreamer.WriteMessageToStream(metaDataMsg)
+	if aacSeqHeader := publisher.GetAACSequenceHeader(); aacSeqHeader != nil {
+		aacMsg := rtmpMsg.NewMessage(aacSeqHeader, rtmpMsg.AudioMsg, session.streamCount, AUDIO_MESSAGE_CHUNK_STREAM)
+		session.messageStreamer.WriteMessageToStream(aacMsg)
+	}
+	if avcSeqHeader := publisher.GetAVCSequenceHeader(); avcSeqHeader != nil {
+		aacMsg := rtmpMsg.NewMessage(avcSeqHeader, rtmpMsg.VideoMsg, session.streamCount, VIDEO_MESSAGE_CHUNK_STREAM)
+		session.messageStreamer.WriteMessageToStream(aacMsg)
+	}
 
 	return nil
 }
@@ -370,7 +368,7 @@ func (session *Session) handlePublishCommand(objects []interface{}) error {
 		session.messageStreamer.WriteMessageToStream(rtmpMsg.NewStatusMessage("error", "NetStream.Publish.BadConnection", "Connection already publishing", 0))
 		return nil
 	}
-	if session.state == Disconnected {
+	if !session.state.Connected {
 		logger.WarningLog.Println("Client attempted publishing without connecting")
 		return nil
 	}
@@ -421,8 +419,18 @@ func (session *Session) handleDataMessage(data []byte) error {
 }
 
 func (session *Session) handleAudioMessage(data []byte) error {
+	soundFormat := byte(0)
+	isSequenceHeader := false
+	if len(data) >= 2 {
+		soundFormat = (data[0] >> 4) & 0b00001111
+		isSequenceHeader = soundFormat == 10 && data[1] == 0
+	}
+
 	if streamName, ok := session.context.GetStreamName(session.sessionId); ok {
 		if publisher := session.context.GetPublisher(streamName); publisher != nil {
+			if isSequenceHeader {
+				publisher.SetAACSequenceHeader(data)
+			}
 			for i := range publisher.Subscribers {
 				subscriber := publisher.Subscribers[i]
 				msg := rtmpMsg.NewMessage(data, rtmpMsg.AudioMsg, session.streamCount, AUDIO_MESSAGE_CHUNK_STREAM)
@@ -438,8 +446,19 @@ func (session *Session) handleAudioMessage(data []byte) error {
 }
 
 func (session *Session) handleVideoMessage(data []byte) error {
+	codecId := byte(0)
+	frameType := byte(0)
+	isSequenceHeader := false
+	if len(data) >= 2 {
+		frameType = (data[0] >> 4) & 0b00001111
+		codecId = data[0] & 0b00001111
+		isSequenceHeader = codecId == 7 && frameType == 1 && data[1] == 0
+	}
 	if streamName, ok := session.context.GetStreamName(session.sessionId); ok {
 		if publisher := session.context.GetPublisher(streamName); publisher != nil {
+			if isSequenceHeader {
+				publisher.SetAVCSequenceHeader(data)
+			}
 			for i := range publisher.Subscribers {
 				subscriber := publisher.Subscribers[i]
 				msg := rtmpMsg.NewMessage(data, rtmpMsg.VideoMsg, session.streamCount, VIDEO_MESSAGE_CHUNK_STREAM)
@@ -455,7 +474,7 @@ func (session *Session) handleVideoMessage(data []byte) error {
 }
 
 func (session *Session) disconnect() {
-	session.state = Disconnected
+	session.state.Connected = false
 	//close(session.messageChannel)
 	//close(session.streamChannel)
 	session.conn.Close()
