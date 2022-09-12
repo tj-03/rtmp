@@ -3,6 +3,10 @@ package rtmp
 import (
 	"errors"
 	"sync"
+
+	"github.com/tj03/rtmp/src/logger"
+	rtmpMsg "github.com/tj03/rtmp/src/message"
+	"github.com/tj03/rtmp/src/util"
 )
 
 //Holds data about the publisher and associated subscribers and provides methods to read/write via RWMutex.
@@ -56,6 +60,27 @@ func (ctx *Context) SetPublisher(streamName string, publisher *Publisher) {
 	ctx.publishersLock.Unlock()
 }
 
+func (ctx *Context) RemovePublisher(sessionId int) {
+	ctx.publishersLock.Lock()
+	ctx.clientStreamsLock.Lock()
+	streamName, ok := ctx.clientStreams[sessionId]
+	if !ok {
+		ctx.publishersLock.Unlock()
+		ctx.clientStreamsLock.Unlock()
+		return
+	}
+	publisher := ctx.publishers[streamName]
+	if publisher == nil {
+		panic("Stream name set but clientstream not set")
+	}
+	publisher.BroadcastMessage(rtmpMsg.NewStatusMessage("status", "NetStream.Play.UnpublishNotify", "Stream unpublished", COMMAND_MESSAGE_CHUNK_STREAM))
+
+	delete(ctx.publishers, streamName)
+	delete(ctx.clientStreams, sessionId)
+	ctx.clientStreamsLock.Unlock()
+	ctx.publishersLock.Unlock()
+}
+
 func (ctx *Context) GetStreamName(sessionId int) (string, bool) {
 	ctx.clientStreamsLock.RLock()
 	streamName, ok := ctx.clientStreams[sessionId]
@@ -80,6 +105,20 @@ func (ctx *Context) AppendToWaitlist(streamName string, subscriber Subscriber) {
 	ctx.waitListLock.Unlock()
 }
 
+func (ctx *Context) RemoveFromWaitlist(sessionId int, streamName string) {
+	ctx.waitListLock.Lock()
+	waitList := ctx.waitLists[streamName]
+	filtered := util.FilterSlice(waitList, func(s Subscriber) bool {
+		return s.SessionId != sessionId
+	})
+	if len(filtered) == len(waitList) {
+		logger.WarningLog.Printf("Subscriber with id = %d was not int waitlist", sessionId)
+	}
+	ctx.waitLists[streamName] = waitList
+
+	ctx.waitListLock.Unlock()
+}
+
 func (publisher *Publisher) AddSubscriber(channel chan MessageResult) error {
 	if channel == nil {
 		return errors.New("channel is nil")
@@ -96,6 +135,20 @@ func (publisher *Publisher) GetSubscribers() []Subscriber {
 	copy(subs, publisher.Subscribers)
 	publisher.subscriberLock.RUnlock()
 	return subs
+}
+
+func (publisher *Publisher) BroadcastMessage(msg rtmpMsg.Message) {
+	publisher.subscriberLock.RLock()
+	for i := range publisher.Subscribers {
+		select {
+		case publisher.Subscribers[i].StreamChannel <- MessageResult{msg, nil}:
+
+		default:
+			logger.WarningLog.Printf("Subscriber with id = %d could not process message", publisher.Subscribers[i].SessionId)
+
+		}
+	}
+	publisher.subscriberLock.RUnlock()
 }
 
 func (publisher *Publisher) SetAACSequenceHeader(seqHeader []byte) {
@@ -130,4 +183,16 @@ func (publisher *Publisher) GetAVCSequenceHeader() []byte {
 	copy(seqHeaderCopy, publisher.AVCSequenceHeader)
 	publisher.avcHeaderLock.RUnlock()
 	return seqHeaderCopy
+}
+
+func (publisher *Publisher) RemoveSubscriber(sessionId int) {
+	publisher.subscriberLock.Lock()
+	filtered := util.FilterSlice(publisher.Subscribers, func(s Subscriber) bool {
+		return s.SessionId != sessionId
+	})
+	if len(filtered) == len(publisher.Subscribers) {
+		logger.WarningLog.Printf("Subscriber with id = %d was not subcribed to publisher with id = %d", sessionId, publisher.SessionId)
+	}
+	publisher.Subscribers = filtered
+	publisher.subscriberLock.Unlock()
 }

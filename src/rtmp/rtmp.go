@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/tj03/rtmp/src/amf"
 	"github.com/tj03/rtmp/src/logger"
@@ -114,6 +115,7 @@ type Session struct {
 	messageChannel  chan MessageResult
 	streamChannel   chan MessageResult
 	ClientMetadata  []byte
+	curStream       string
 }
 
 type MessageResult struct {
@@ -141,19 +143,28 @@ func (session *Session) Run() error {
 	session.messageStreamer.Init(Test{session.conn.Conn}, session.chunkSize)
 	go session.ReadMessages()
 	for {
+		session.conn.SetDeadline(time.Now().Add(time.Second * 5))
 		select {
 		case msgResult := <-session.messageChannel:
-			session.HandleMessage(msgResult.Message)
+			if msgResult.Err != nil {
+				return msgResult.Err
+			}
+			err := session.HandleMessage(msgResult.Message)
+			if err != nil {
+				return err
+			}
 		default:
 		}
 		select {
 		case msgResult := <-session.streamChannel:
-			if msgResult.Err == nil {
-				mediaMsg := msgResult.Message
-
-				mediaMsg.MessageStreamId = session.streamCount - 1
-				session.messageStreamer.WriteMessageToStream(mediaMsg)
-
+			if msgResult.Err != nil {
+				return msgResult.Err
+			}
+			mediaMsg := msgResult.Message
+			mediaMsg.MessageStreamId = session.streamCount - 1
+			err := session.messageStreamer.WriteMessageToStream(mediaMsg)
+			if err != nil {
+				return err
 			}
 
 		default:
@@ -166,6 +177,11 @@ func (session *Session) Run() error {
 func (session *Session) ReadMessages() {
 	for {
 		msg, err := session.messageStreamer.ReadMessageFromStream()
+		if err != nil {
+			session.messageChannel <- MessageResult{rtmpMsg.Message{}, err}
+			close(session.messageChannel)
+			return
+		}
 		//Any write operations to the message streamer must be handled here to avoid data race
 		switch msg.MessageType {
 		case rtmpMsg.SetChunkSize:
@@ -180,6 +196,7 @@ func (session *Session) ReadMessages() {
 }
 
 func (session *Session) HandleMessage(msg rtmpMsg.Message) error {
+	var err error
 	switch msg.MessageType {
 
 	case 0:
@@ -189,21 +206,24 @@ func (session *Session) HandleMessage(msg rtmpMsg.Message) error {
 		logger.WarningLog.Println("User control Message Sent - Unhandled")
 
 	case rtmpMsg.CommandMsg0, rtmpMsg.CommandMsg3:
-		session.handleCommandMessage(msg.MessageData)
+		err = session.handleCommandMessage(msg.MessageData)
 
 	case rtmpMsg.DataMsg0:
-		session.handleDataMessage(msg.MessageData)
+		err = session.handleDataMessage(msg.MessageData)
 
 	case rtmpMsg.AudioMsg:
-		session.handleAudioMessage(msg.MessageData)
+		err = session.handleAudioMessage(msg.MessageData)
 
 	case rtmpMsg.VideoMsg:
-		session.handleVideoMessage(msg.MessageData)
+		err = session.handleVideoMessage(msg.MessageData)
 
 	case rtmpMsg.Ack:
 
 	default:
 		logger.ErrorLog.Fatalln("Unimplemented message type", msg.MessageType)
+	}
+	if err != nil {
+		return err
 	}
 	//session.conn.Flush()
 	return nil
@@ -236,14 +256,14 @@ func (session *Session) handleCommandMessage(data []byte) error {
 
 	switch commandName {
 	case "connect":
-		session.handleConnectCommand(amfObjects)
+		return session.handleConnectCommand(amfObjects)
 	case "createStream":
-		session.handleCreateStreamCommand(amfObjects)
+		return session.handleCreateStreamCommand(amfObjects)
 	case "publish":
-		session.handlePublishCommand(amfObjects)
+		return session.handlePublishCommand(amfObjects)
 	case "play":
-		session.handlePlayCommand(amfObjects)
-	case "releaseStream", "FCPublish", "getStreamLength", "deleteStream":
+		return session.handlePlayCommand(amfObjects)
+	case "releaseStream", "FCPublish", "FCUnpublish", "getStreamLength", "deleteStream":
 		logger.WarningLog.Println("Unknown command message received. Unhandled. Objects:", amfObjects)
 	default:
 		logger.InfoLog.Fatalln("Unimplemented command - cmdName: ", amfObjects)
@@ -251,7 +271,7 @@ func (session *Session) handleCommandMessage(data []byte) error {
 	return nil
 }
 
-func (session *Session) handleConnectCommand(objects []interface{}) {
+func (session *Session) handleConnectCommand(objects []interface{}) error {
 	var result string
 	if len(objects) <= 3 {
 		result = "_result"
@@ -279,22 +299,33 @@ func (session *Session) handleConnectCommand(objects []interface{}) {
 	setChunkMsg := rtmpMsg.NewSetChunkSizeMessage(4096)
 
 	logger.InfoLog.Println("Writing window ack bytes to stream", winAckMsg)
-	session.messageStreamer.WriteMessageToStream(winAckMsg)
+	if err := session.messageStreamer.WriteMessageToStream(winAckMsg); err != nil {
+		return err
+	}
 
 	logger.InfoLog.Println("Writing set bandwidth message", setBandwidthMsg)
-	session.messageStreamer.WriteMessageToStream(setBandwidthMsg)
+	if err := session.messageStreamer.WriteMessageToStream(setBandwidthMsg); err != nil {
+		return err
+	}
 
 	logger.InfoLog.Println("Writing set chunk size message", setChunkMsg)
-	session.messageStreamer.WriteMessageToStream(setChunkMsg)
+	if err := session.messageStreamer.WriteMessageToStream(setChunkMsg); err != nil {
+		return err
+
+	}
 	session.messageStreamer.SetChunkSize(4096)
 
 	logger.InfoLog.Println("Writing stream begin message")
-	session.messageStreamer.WriteMessageToStream(streamBeginMsg)
-
+	if err := session.messageStreamer.WriteMessageToStream(streamBeginMsg); err != nil {
+		return err
+	}
 	resMsg := rtmpMsg.NewCommandMessage0(response, 0, COMMAND_MESSAGE_CHUNK_STREAM)
 	logger.InfoLog.Println("Writing connect response", resMsg)
-	session.messageStreamer.WriteMessageToStream(resMsg)
+	if err := session.messageStreamer.WriteMessageToStream(resMsg); err != nil {
+		return err
+	}
 	session.state.Connected = true
+	return nil
 }
 
 func (session *Session) handleCreateStreamCommand(objects []interface{}) error {
@@ -329,6 +360,7 @@ func (session *Session) handlePlayCommand(objects []interface{}) error {
 	}
 	publisher := session.context.GetPublisher(streamName)
 	if publisher == nil {
+		session.curStream = streamName
 		session.context.AppendToWaitlist(streamName, Subscriber{session.streamChannel, session.sessionId})
 		return nil
 	}
@@ -344,15 +376,22 @@ func (session *Session) handlePlayCommand(objects []interface{}) error {
 	session.messageStreamer.WriteMessageToStream(playStartMsg)
 
 	publisher.AddSubscriber(session.streamChannel)
+	session.curStream = streamName
 	metaDataMsg := rtmpMsg.NewMessage(publisher.Metadata, rtmpMsg.DataMsg0, session.streamCount, COMMAND_MESSAGE_CHUNK_STREAM)
 	session.messageStreamer.WriteMessageToStream(metaDataMsg)
 	if aacSeqHeader := publisher.GetAACSequenceHeader(); aacSeqHeader != nil {
 		aacMsg := rtmpMsg.NewMessage(aacSeqHeader, rtmpMsg.AudioMsg, session.streamCount, AUDIO_MESSAGE_CHUNK_STREAM)
-		session.messageStreamer.WriteMessageToStream(aacMsg)
+		err := session.messageStreamer.WriteMessageToStream(aacMsg)
+		if err != nil {
+			return err
+		}
 	}
 	if avcSeqHeader := publisher.GetAVCSequenceHeader(); avcSeqHeader != nil {
-		aacMsg := rtmpMsg.NewMessage(avcSeqHeader, rtmpMsg.VideoMsg, session.streamCount, VIDEO_MESSAGE_CHUNK_STREAM)
-		session.messageStreamer.WriteMessageToStream(aacMsg)
+		avcMsg := rtmpMsg.NewMessage(avcSeqHeader, rtmpMsg.VideoMsg, session.streamCount, VIDEO_MESSAGE_CHUNK_STREAM)
+		err := session.messageStreamer.WriteMessageToStream(avcMsg)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -365,8 +404,8 @@ func (session *Session) handlePublishCommand(objects []interface{}) error {
 	}
 	_, ok := session.context.GetStreamName(session.sessionId)
 	if ok {
-		session.messageStreamer.WriteMessageToStream(rtmpMsg.NewStatusMessage("error", "NetStream.Publish.BadConnection", "Connection already publishing", 0))
-		return nil
+		err := session.messageStreamer.WriteMessageToStream(rtmpMsg.NewStatusMessage("error", "NetStream.Publish.BadConnection", "Connection already publishing", 0))
+		return err
 	}
 	if !session.state.Connected {
 		logger.WarningLog.Println("Client attempted publishing without connecting")
@@ -404,18 +443,12 @@ func (session *Session) handleDataMessage(data []byte) error {
 	if streamName, ok := session.context.GetStreamName(session.sessionId); ok {
 		if publisher := session.context.GetPublisher(streamName); publisher != nil {
 			publisher.Metadata = data
-			for _, subscriber := range publisher.Subscribers {
-				select {
-				case subscriber.StreamChannel <- MessageResult{dataMsg, nil}:
-				default:
-					logger.WarningLog.Printf("Subscriber with id = %d could not process message", subscriber.SessionId)
-				}
-			}
+			publisher.BroadcastMessage(dataMsg)
 		}
 	}
 
-	session.messageStreamer.WriteMessageToStream(dataMsg)
-	return nil
+	err := session.messageStreamer.WriteMessageToStream(dataMsg)
+	return err
 }
 
 func (session *Session) handleAudioMessage(data []byte) error {
@@ -431,15 +464,8 @@ func (session *Session) handleAudioMessage(data []byte) error {
 			if isSequenceHeader {
 				publisher.SetAACSequenceHeader(data)
 			}
-			for i := range publisher.Subscribers {
-				subscriber := publisher.Subscribers[i]
-				msg := rtmpMsg.NewMessage(data, rtmpMsg.AudioMsg, session.streamCount, AUDIO_MESSAGE_CHUNK_STREAM)
-				select {
-				case subscriber.StreamChannel <- MessageResult{msg, nil}:
-				default:
-					logger.WarningLog.Printf("Subscriber with id = %d could not process message", subscriber.SessionId)
-				}
-			}
+			msg := rtmpMsg.NewMessage(data, rtmpMsg.AudioMsg, session.streamCount, AUDIO_MESSAGE_CHUNK_STREAM)
+			publisher.BroadcastMessage(msg)
 		}
 	}
 	return nil
@@ -459,15 +485,8 @@ func (session *Session) handleVideoMessage(data []byte) error {
 			if isSequenceHeader {
 				publisher.SetAVCSequenceHeader(data)
 			}
-			for i := range publisher.Subscribers {
-				subscriber := publisher.Subscribers[i]
-				msg := rtmpMsg.NewMessage(data, rtmpMsg.VideoMsg, session.streamCount, VIDEO_MESSAGE_CHUNK_STREAM)
-				select {
-				case subscriber.StreamChannel <- MessageResult{msg, nil}:
-				default:
-					logger.WarningLog.Printf("Subscriber with id = %d could not process message", subscriber.SessionId)
-				}
-			}
+			msg := rtmpMsg.NewMessage(data, rtmpMsg.VideoMsg, session.streamCount, VIDEO_MESSAGE_CHUNK_STREAM)
+			publisher.BroadcastMessage(msg)
 		}
 	}
 	return nil
@@ -475,10 +494,15 @@ func (session *Session) handleVideoMessage(data []byte) error {
 
 func (session *Session) disconnect() {
 	session.state.Connected = false
-	//close(session.messageChannel)
-	//close(session.streamChannel)
+	if publisher := session.context.GetPublisher(session.curStream); publisher != nil {
+		publisher.RemoveSubscriber(session.sessionId)
+	}
+	session.context.RemoveFromWaitlist(session.sessionId, session.curStream)
+	session.context.RemovePublisher(session.sessionId)
+	close(session.streamChannel)
 	session.conn.Close()
 	logger.InfoLog.Printf("Session %d disconnected", session.sessionId)
+	fmt.Printf("Session %d disconnected\n", session.sessionId)
 }
 
 func (session *Session) CompleteHandshake() error {

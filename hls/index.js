@@ -27,13 +27,18 @@ fs.readdir(dir, (err, files) => {
 
 ffmpeg('rtmp://'+host+':'+port+path, { timeout: 432000 }).addOptions([
     '-c:v copy',
-    '-c:a copy',
+    '-c:a aac',
     '-hls_time 2',
     '-hls_list_size 10',
     '-hls_flags delete_segments',
     '-hls_delete_threshold 5',
     '-start_number 1'
   ]).output('public/videos/index.m3u8').on("error",console.log).run()
+// var child_process = require('child_process');
+
+// child_process.exec(__dirname + '\\vid.bat', function(error, stdout, stderr) {
+//     console.log(error);
+// });
 
 
 app.use(cors(corsOptions))
