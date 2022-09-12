@@ -14,9 +14,16 @@ var corsOptions = {
     origin: '*',
   }
 
-
-function callback() { // do something when stream ends and encoding finshes 
-}
+let dir = __dirname + "\\public\\videos\\";
+fs.readdir(dir, (err, files) => {
+    if (err) throw err;
+  
+    for (const file of files) {
+      fs.unlink(dir + file, err => {
+        if (err) throw err;
+      });
+    }
+  });
 
 ffmpeg('rtmp://'+host+':'+port+path, { timeout: 432000 }).addOptions([
     '-c:v copy',
@@ -26,7 +33,8 @@ ffmpeg('rtmp://'+host+':'+port+path, { timeout: 432000 }).addOptions([
     '-hls_flags delete_segments',
     '-hls_delete_threshold 5',
     '-start_number 1'
-  ]).output('public/videos/index.m3u8').on('end', callback).on("error",console.log).run()
+  ]).output('public/videos/index.m3u8').on("error",console.log).run()
+
 
 app.use(cors(corsOptions))
 app.use(express.static('public'))
