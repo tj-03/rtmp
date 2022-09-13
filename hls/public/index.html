@@ -8,28 +8,42 @@
 </head>
 <body>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <!-- In the head of your document with your other CSS includes... -->
+<!-- Video.js base CSS -->
 
-    <video id="demoplayer" controls></video>
+<link rel = "stylesheet" href = "styles.css"/>
+
+<script src = "script.js" defer ></script>
+
+
+
+         <video  id="demoplayer" controls autoplay></video>
+  
+    </div>
+
 <script>
+    let link = 'https://32b4-24-250-146-149.ngrok.io'
     var video = document.getElementById('demoplayer');
     if(Hls.isSupported()) {
         var hlsjsConfig = {
             "maxBufferSize": 0,
             "maxBufferLength": 30,
             "liveSyncDuration": 30,
-            "liveMaxLatencyDuration": Infinity
+            "liveMaxLatencyDuration": Infinity,
+            "liveDurationInfinity":true,
+            "enableWorker":true
         }
         var dnaConfig = {};
         var hls = new Hls(hlsjsConfig);
         hls.attachMedia(video);
         hls.on(Hls.Events.MEDIA_ATTACHED,function() {
-            hls.loadSource('https://4b5f-24-250-146-149.ngrok.io/live/index.m3u8');
+            hls.loadSource(`${link}/live/index.m3u8`);
         });
         hls.nextLevel = 0;
     }
     else if (video?.canPlayType?.('application/vnd.apple.mpegurl')) {
         alert("lam")
-        video.src = 'https://4b5f-24-250-146-149.ngrok.io/live/index.m3u8';
+        video.src = `${link}/live/index.m3u8`;
         video.addEventListener('canplay',function() {
              video.play();
         });

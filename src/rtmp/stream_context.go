@@ -1,7 +1,6 @@
 package rtmp
 
 import (
-	"errors"
 	"sync"
 
 	"github.com/tj03/rtmp/src/logger"
@@ -19,8 +18,8 @@ type Publisher struct {
 	//AMF0 Encoded Video MetaData
 	Metadata []byte
 	//AAC and AVC sequence headers MUST be sent to subscriber before sending any video/audio data
-	AACSequenceHeader []byte
-	AVCSequenceHeader []byte
+	aacSequenceHeader []byte
+	avcSequenceHeader []byte
 }
 
 type Subscriber struct {
@@ -109,24 +108,23 @@ func (ctx *Context) RemoveFromWaitlist(sessionId int, streamName string) {
 	ctx.waitListLock.Lock()
 	waitList := ctx.waitLists[streamName]
 	filtered := util.FilterSlice(waitList, func(s Subscriber) bool {
-		return s.SessionId != sessionId
+		return s.SessionId == sessionId
 	})
 	if len(filtered) == len(waitList) {
 		logger.WarningLog.Printf("Subscriber with id = %d was not int waitlist", sessionId)
 	}
-	ctx.waitLists[streamName] = waitList
+	ctx.waitLists[streamName] = filtered
 
 	ctx.waitListLock.Unlock()
 }
 
-func (publisher *Publisher) AddSubscriber(channel chan MessageResult) error {
+func (publisher *Publisher) AddSubscriber(channel chan MessageResult, sessionId int) {
 	if channel == nil {
-		return errors.New("channel is nil")
+		panic("channel is nil")
 	}
 	publisher.subscriberLock.Lock()
-	publisher.Subscribers = append(publisher.Subscribers, Subscriber{StreamChannel: channel})
+	publisher.Subscribers = append(publisher.Subscribers, Subscriber{StreamChannel: channel, SessionId: sessionId})
 	publisher.subscriberLock.Unlock()
-	return nil
 }
 
 func (publisher *Publisher) GetSubscribers() []Subscriber {
@@ -153,34 +151,34 @@ func (publisher *Publisher) BroadcastMessage(msg rtmpMsg.Message) {
 
 func (publisher *Publisher) SetAACSequenceHeader(seqHeader []byte) {
 	publisher.aacHeaderLock.Lock()
-	publisher.AACSequenceHeader = seqHeader
+	publisher.aacSequenceHeader = seqHeader
 	publisher.aacHeaderLock.Unlock()
 }
 
 func (publisher *Publisher) GetAACSequenceHeader() []byte {
-	if publisher.AACSequenceHeader == nil {
+	if publisher.aacSequenceHeader == nil {
 		return nil
 	}
 	publisher.aacHeaderLock.RLock()
-	seqHeaderCopy := make([]byte, len(publisher.AACSequenceHeader))
-	copy(seqHeaderCopy, publisher.AACSequenceHeader)
+	seqHeaderCopy := make([]byte, len(publisher.aacSequenceHeader))
+	copy(seqHeaderCopy, publisher.aacSequenceHeader)
 	publisher.aacHeaderLock.RUnlock()
 	return seqHeaderCopy
 }
 
 func (publisher *Publisher) SetAVCSequenceHeader(seqHeader []byte) {
 	publisher.avcHeaderLock.Lock()
-	publisher.AVCSequenceHeader = seqHeader
+	publisher.avcSequenceHeader = seqHeader
 	publisher.avcHeaderLock.Unlock()
 }
 
 func (publisher *Publisher) GetAVCSequenceHeader() []byte {
-	if publisher.AVCSequenceHeader == nil {
+	if publisher.avcSequenceHeader == nil {
 		return nil
 	}
 	publisher.avcHeaderLock.RLock()
-	seqHeaderCopy := make([]byte, len(publisher.AVCSequenceHeader))
-	copy(seqHeaderCopy, publisher.AVCSequenceHeader)
+	seqHeaderCopy := make([]byte, len(publisher.avcSequenceHeader))
+	copy(seqHeaderCopy, publisher.avcSequenceHeader)
 	publisher.avcHeaderLock.RUnlock()
 	return seqHeaderCopy
 }
@@ -188,7 +186,7 @@ func (publisher *Publisher) GetAVCSequenceHeader() []byte {
 func (publisher *Publisher) RemoveSubscriber(sessionId int) {
 	publisher.subscriberLock.Lock()
 	filtered := util.FilterSlice(publisher.Subscribers, func(s Subscriber) bool {
-		return s.SessionId != sessionId
+		return s.SessionId == sessionId
 	})
 	if len(filtered) == len(publisher.Subscribers) {
 		logger.WarningLog.Printf("Subscriber with id = %d was not subcribed to publisher with id = %d", sessionId, publisher.SessionId)

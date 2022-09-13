@@ -273,7 +273,7 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, int, error) {
 		return Chunk{}, bytesRead, err
 	}
 	if n != size {
-		panic("didnt read everything in chunk data")
+		return Chunk{}, n, errors.New("didnt read everything in chunk data")
 	}
 	chunk.ChunkData = data
 	return chunk, bytesRead, nil

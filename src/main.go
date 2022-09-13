@@ -15,6 +15,6 @@ func main() {
 	// fmt.Println(config)
 	// return
 	s := rtmp.NewRTMPServer()
-	s.Listen(8080)
+	s.Listen(1935)
 
 }

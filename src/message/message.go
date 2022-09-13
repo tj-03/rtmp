@@ -2,6 +2,7 @@ package message
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/tj03/rtmp/src/amf"
 	"github.com/tj03/rtmp/src/util"
@@ -107,6 +108,12 @@ func NewStreamIsRecordedMessage(streamId uint32) Message {
 func NewStreamEOFMsg(streamId uint32) Message {
 	buf := util.Uint16ToBuf(uint16(StreamIsRecorded))
 	buf = append(buf, util.Uint32ToBuf(streamId)...)
+	return NewMessage(buf, UserControl, int(streamId), 2)
+}
+
+func NewPingMsg(pingTime time.Time, streamId int) Message {
+	buf := util.Uint16ToBuf(uint16(PingRequest))
+	buf = append(buf, util.Uint32ToBuf(uint32(pingTime.UnixMilli()))...)
 	return NewMessage(buf, UserControl, int(streamId), 2)
 }
 

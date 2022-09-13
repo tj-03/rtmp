@@ -2,12 +2,12 @@ const express = require('express')
 const fs = require("fs")
 const app = express()
 const cors = require("cors")
-
 var ffmpeg = require('fluent-ffmpeg')
+const chokidar = require("chokidar")
 
 // host, port and path to the RTMP stream
 var host = 'localhost'
-var port = '8080'
+var port = '1935'
 var path = '/twitch/twitch'
 
 var corsOptions = {
@@ -25,13 +25,45 @@ fs.readdir(dir, (err, files) => {
     }
   });
 
+  let virtualFiles = {}
+  let watcher = chokidar.watch(dir);
+  watcher.on('unlink', path => {
+      if (path.endsWith(".m3u8") || path.endsWith(".ts")){
+          delete virtualFiles[path]
+      }
+  })
+  
+  
+  
+  function update(path){
+      fs.readFile(path, (err, data) => {
+          if (err)
+              throw err
+          virtualFiles[path] = data
+          data
+      })
+  }
+  watcher.on('change', path => {
+      if (path.endsWith(".m3u8") || path.endsWith(".ts")){
+          update(path)
+      }
+  
+  })
+  
+  watcher.on('add', path => {
+      if (path.endsWith(".m3u8") || path.endsWith(".ts")){
+          update(path)
+      }
+  
+  })
+
 ffmpeg('rtmp://'+host+':'+port+path, { timeout: 432000 }).addOptions([
     '-c:v copy',
     '-c:a aac',
     '-hls_time 2',
     '-hls_list_size 10',
     '-hls_flags delete_segments',
-    '-hls_delete_threshold 5',
+    '-hls_delete_threshold 12',
     '-start_number 1'
   ]).output('public/videos/index.m3u8').on("error",console.log).run()
 // var child_process = require('child_process');
@@ -50,9 +82,7 @@ app.get('/live/:fname', (req, res) => {
     fname = __dirname + "\\public\\videos\\" + fname
     console.log("dir",fname)
     try{
-        res.sendFile(fname, (err) => {
-            console.log("File err", err)
-        })
+        res.end(virtualFiles[fname], 'binary')
     }
     catch(err){
         console.log(err);
@@ -63,6 +93,6 @@ app.get('/live/:fname', (req, res) => {
 })
 
 app.listen(8000, () => {
-  console.log(`Example app listening on port ${port}`)
+  console.log(`Example app listening on port ${8000}`)
 })
 

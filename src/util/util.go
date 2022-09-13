@@ -60,10 +60,10 @@ func Uint16ToBuf(num uint16) []byte {
 	return buf
 }
 
-func FilterSlice[T any](s []T, pred func(obj T) bool) []T {
+func FilterSlice[T any](s []T, shouldExlude func(obj T) bool) []T {
 	filtered := []T{}
 	for i := range s {
-		if pred(s[i]) {
+		if shouldExlude(s[i]) {
 			continue
 		}
 		filtered = append(filtered, s[i])

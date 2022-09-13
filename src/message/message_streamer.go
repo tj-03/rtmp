@@ -12,7 +12,6 @@ type MessageStreamer struct {
 	chunkStreamer    ChunkStreamer
 	MaxWindowAckSize int
 	bytesRead        int
-	cache            map[int]ChunkMessageHeader
 }
 
 var t uint32
@@ -38,7 +37,7 @@ func verifyChunks(chunks []Chunk, msg Message) bool {
 	return util.CmpSlice(acc, msg.MessageData)
 }
 func (mStreamer *MessageStreamer) NewChunksFromMessage(msg Message) ([]Chunk, error) {
-	data := []byte{}
+	var data []byte
 	originalSize := len(msg.MessageData)
 	var size int
 	cur := 0
@@ -48,11 +47,7 @@ func (mStreamer *MessageStreamer) NewChunksFromMessage(msg Message) ([]Chunk, er
 
 	for cur < originalSize {
 		remainingSize := originalSize - cur
-		if chunkSize > remainingSize {
-			size = remainingSize
-		} else {
-			size = chunkSize
-		}
+		size = util.Min(chunkSize, remainingSize)
 		//chunksLength := len(chunks)
 		var format int
 		messageHeader := ChunkMessageHeader{}
@@ -69,9 +64,7 @@ func (mStreamer *MessageStreamer) NewChunksFromMessage(msg Message) ([]Chunk, er
 			}
 		}
 		basicHeader := ChunkBasicHeader{uint8(format), uint64(chunkStreamId)}
-		if false && msg.MessageType == VideoMsg {
-			mStreamer.cache[chunkStreamId] = messageHeader
-		}
+
 		data = msg.MessageData[cur : cur+size]
 		cur += size
 
@@ -100,6 +93,19 @@ func (mStreamer *MessageStreamer) WriteMessageToStream(msg Message) error {
 		logger.ErrorLog.Fatalln("Error encountered when chunking message", err, msg)
 	}
 	return mStreamer.chunkStreamer.WriteChunksToStream(chunks)
+}
+
+func (mStreamer *MessageStreamer) WriteMessagesToStream(messages ...Message) (int, error) {
+	for i, msg := range messages {
+		chunks, err := mStreamer.NewChunksFromMessage(msg)
+		if err != nil {
+			logger.ErrorLog.Fatalln("Error encountered when chunking message", err, msg)
+		}
+		if err = mStreamer.chunkStreamer.WriteChunksToStream(chunks); err != nil {
+			return i + 1, err
+		}
+	}
+	return len(messages), nil
 }
 
 func (mStreamer *MessageStreamer) ReadMessageFromStream() (Message, error) {
