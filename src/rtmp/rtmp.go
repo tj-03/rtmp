@@ -19,7 +19,6 @@ var DATA_MESSAGE_CHUNK_STREAM = 8
 
 type Server struct {
 	//change to arr?
-	sessions     map[int]*Session
 	context      *Context
 	sessionCount int
 }
@@ -41,14 +40,9 @@ func (t Connection) WriteByte(b byte) error {
 	return err
 }
 
-func (t Connection) Flush() error {
-	return nil
-}
-
 //Initializes server fields and returns server
 func NewRTMPServer() Server {
 	server := Server{}
-	server.sessions = make(map[int]*Session)
 	server.context = &Context{}
 	server.context.clientStreams = make(map[int]string)
 	server.context.publishers = map[string]*Publisher{}
@@ -64,6 +58,7 @@ func (server *Server) Listen(port int) error {
 	}
 	defer tcpSocket.Close()
 	logger.InfoLog.Println("Listening on port", port)
+	fmt.Println("Listening on port", port)
 	for {
 		tcpConnection, err := tcpSocket.Accept()
 		if err != nil {
@@ -80,8 +75,8 @@ func (server *Server) Listen(port int) error {
 }
 
 func (server *Server) onConnection(c *Connection) {
-	server.sessions[server.sessionCount] = &Session{context: server.context, sessionId: server.sessionCount}
-	go server.sessions[server.sessionCount].HandleConnection(c)
+	session := Session{context: server.context, sessionId: server.sessionCount}
+	go session.HandleConnection(c)
 	server.sessionCount++
 }
 
@@ -119,11 +114,7 @@ func (session *Session) HandleConnection(conn *Connection) error {
 	session.streamId = 6
 	session.conn = conn
 	if err := session.CompleteHandshake(); err != nil {
-		logger.ErrorLog.Printf("Session %d failed: err: %s", session.sessionId, err.Error())
-		return err
-	}
-	if err := conn.Flush(); err != nil {
-		logger.ErrorLog.Println("handshake flush failed", err)
+		logger.ErrorLog.Printf("Session %d handshake failed: err: %s", session.sessionId, err.Error())
 		return err
 	}
 	err := session.Run()
@@ -138,9 +129,12 @@ func (session *Session) Run() error {
 	prevPingTime := time.Now()
 	go session.ReadMessages()
 	for {
+		//Deadline necessary to detect errors such as when conn.Read blocks
 		deadLine := 15
 		session.conn.SetDeadline(time.Now().Add(time.Second * time.Duration(deadLine)))
 
+		//If a stream is paused we want to make sure the client is still available during that time
+		//If they dont send a ping response the connection will close
 		if session.state.Paused {
 			if time.Since(prevPingTime) > time.Second {
 				curTime := time.Now()
@@ -160,7 +154,7 @@ func (session *Session) Run() error {
 			}
 			err := session.HandleMessage(msgResult.Message)
 			if err != nil {
-				logger.ErrorLog.Printf("Session %d: Error writing message to stream after attempting to handle msg: err:%s, Msg:%s",
+				logger.ErrorLog.Printf("Session %d: Error after attempting to handle msg: err:%s, Msg:%s",
 					session.sessionId,
 					err.Error(),
 					rtmpMsg.MessageToString(msgResult.Message, false))
@@ -187,20 +181,21 @@ func (session *Session) Run() error {
 func (session *Session) ReadMessages() {
 	for {
 		msg, err := session.messageStreamer.ReadMessageFromStream()
+		switch msg.MessageType {
+		//Handle chunk size here to avoid reading new messages without changing the chunk size
+		case rtmpMsg.SetChunkSize:
+			session.handleSetChunkSize(msg.MessageData)
+			continue
+		case rtmpMsg.WindowAckSize:
+			session.handleSetWindowAckSize(msg.MessageData)
+			continue
+		}
 		if err != nil {
 			session.messageChannel <- MessageResult{rtmpMsg.Message{}, err}
 			close(session.messageChannel)
 			return
 		}
 		//Any write operations to the message streamer must be handled here to avoid data race
-		switch msg.MessageType {
-		case rtmpMsg.SetChunkSize:
-			session.handleSetChunkSize(msg.MessageData)
-			continue
-		case rtmpMsg.WindowAckSize:
-			session.messageStreamer.MaxWindowAckSize = int(binary.BigEndian.Uint32(msg.MessageData[:4]))
-			continue
-		}
 		session.messageChannel <- MessageResult{msg, err}
 	}
 }
@@ -211,6 +206,12 @@ func (session *Session) HandleMessage(msg rtmpMsg.Message) error {
 
 	case 0:
 		//logger.ErrorLog.Println("Message type 0")
+
+	case rtmpMsg.SetChunkSize:
+		err = session.handleSetChunkSize(msg.MessageData)
+
+	case rtmpMsg.WindowAckSize:
+		err = session.handleSetWindowAckSize(msg.MessageData)
 
 	case rtmpMsg.UserControl:
 		eventType := 0
@@ -232,17 +233,17 @@ func (session *Session) HandleMessage(msg rtmpMsg.Message) error {
 		err = session.handleVideoMessage(msg.MessageData)
 
 	case rtmpMsg.Ack:
+		//do nothing
 
 	default:
 		logger.ErrorLog.Fatalln("Unimplemented message type", msg.MessageType)
 	}
-	if err != nil {
-		return err
-	}
-	return nil
+
+	return err
 
 }
 
+//If a publisher sends a unpublish message we should update the session state
 func (session *Session) handleStreamMessage(msg rtmpMsg.Message) error {
 	if msg.MessageType == rtmpMsg.CommandMsg0 {
 		objs, _, err := amf.DecodeBytes(msg.MessageData)
@@ -266,28 +267,39 @@ func (session *Session) handleStreamMessage(msg rtmpMsg.Message) error {
 	return nil
 }
 
-func (session *Session) handleSetChunkSize(data []byte) {
-	if data[0] != 0 {
+func (session *Session) handleSetChunkSize(data []byte) error {
+	if len(data) < 4 || data[0]&1 == 1 {
 		logger.WarningLog.Println("Set chunk size message err - first bit not 0", data)
-		return
+		return errors.New("invalid chunk size sent")
 	}
-	if len(data) != 4 {
-		logger.WarningLog.Println("Set chunk size payload err - payload length not 4")
-	}
-	chunkSize := binary.BigEndian.Uint32(data[0:4])
+	chunkSize := binary.BigEndian.Uint32(data[:4])
 	logger.InfoLog.Println("Setting chunk size:", chunkSize)
-	session.messageStreamer.SetChunkSize(int(chunkSize))
+	session.messageStreamer.SetChunkSize(chunkSize)
+	return nil
+}
+
+func (session *Session) handleSetWindowAckSize(data []byte) error {
+	if len(data) != 4 {
+		logger.WarningLog.Println("Set window ack sizw payload err - payload length not 4")
+		return errors.New("invalid window size sent")
+
+	}
+	windowSize := binary.BigEndian.Uint32(data[:4])
+	logger.InfoLog.Println("Setting window ack size:", windowSize)
+	session.messageStreamer.MaxWindowAckSize = int(windowSize)
+	return nil
 }
 
 func (session *Session) handleCommandMessage(data []byte) error {
 	amfObjects, _, _ := amf.DecodeBytes(data)
 	if len(amfObjects) == 0 {
-		logger.InfoLog.Fatalln("No objects decoded")
-		return errors.New("no objects decoded")
+		logger.WarningLog.Println("No objects decoded")
+		return nil
 	}
 	commandName, ok := amfObjects[0].(string)
 	if !ok {
-		logger.ErrorLog.Fatalln("Command message payload does not have a string(cmd message) as first amf object")
+		logger.WarningLog.Println("Command message payload does not have a string(cmd message) as first amf object")
+		return nil
 	}
 
 	switch commandName {
@@ -308,12 +320,7 @@ func (session *Session) handleCommandMessage(data []byte) error {
 }
 
 func (session *Session) handleConnectCommand(objects []interface{}) error {
-	var result string
-	if len(objects) <= 3 {
-		result = "_result"
-	} else {
-		result = "_error"
-	}
+	result := "_result"
 	logger.InfoLog.Println("Connect object from client", objects[2])
 	info := map[string]interface{}{
 		"fmsVer":       "FMS/3,0,1,123",
@@ -332,7 +339,8 @@ func (session *Session) handleConnectCommand(objects []interface{}) error {
 	winAckMsg := rtmpMsg.NewWinAckMessage(5000000)
 	setBandwidthMsg := rtmpMsg.NewSetPeerBandwidthMessage(5000000, 2)
 	streamBeginMsg := rtmpMsg.NewStreamBeginMessage(0)
-	setChunkMsg := rtmpMsg.NewSetChunkSizeMessage(4096)
+	chunkSize := session.messageStreamer.GetChunkSize()
+	setChunkMsg := rtmpMsg.NewSetChunkSizeMessage(chunkSize)
 
 	logger.InfoLog.Println("Writing window ack bytes to stream", winAckMsg)
 	if err := session.messageStreamer.WriteMessageToStream(winAckMsg); err != nil {
@@ -347,9 +355,7 @@ func (session *Session) handleConnectCommand(objects []interface{}) error {
 	logger.InfoLog.Println("Writing set chunk size message", setChunkMsg)
 	if err := session.messageStreamer.WriteMessageToStream(setChunkMsg); err != nil {
 		return err
-
 	}
-	session.messageStreamer.SetChunkSize(4096)
 
 	logger.InfoLog.Println("Writing stream begin message")
 	if err := session.messageStreamer.WriteMessageToStream(streamBeginMsg); err != nil {
@@ -386,8 +392,6 @@ func (session *Session) handleCreateStreamCommand(objects []interface{}) error {
 	return err
 }
 
-//TODO: check live/record setting to determine whether its actually a live stream
-//Currently assumes all streams are live
 func (session *Session) handlePlayCommand(objects []interface{}) error {
 	if len(objects) < 4 {
 		logger.WarningLog.Printf("Session %d: client sent invalid objects", session.sessionId)
@@ -408,18 +412,18 @@ func (session *Session) handlePlayCommand(objects []interface{}) error {
 		session.context.AppendToWaitlist(streamName, Subscriber{session.streamChannel, session.sessionId})
 		return nil
 	}
-	session.messageStreamer.WriteMessageToStream(rtmpMsg.NewSetChunkSizeMessage(4096))
-	session.messageStreamer.SetChunkSize(4096)
+	session.messageStreamer.WriteMessageToStream(rtmpMsg.NewSetChunkSizeMessage(session.messageStreamer.GetChunkSize()))
 
-	//TODO:Have to figure out how to save video - doesnt actually record currently
 	streamRecordedMsg := rtmpMsg.NewStreamIsRecordedMessage(uint32(session.streamId))
 	streamBeginMsg := rtmpMsg.NewStreamBeginMessage(uint32(session.streamId))
 	playResetMsg := rtmpMsg.NewStatusMessage("status", "NetStream.Play.Reset", "Playing and resetting stream", session.streamId)
 	playStartMsg := rtmpMsg.NewStatusMessage("status", "NetStream.Play.Start", "Started playing stream.", session.streamId)
-	_, err := session.messageStreamer.WriteMessagesToStream(streamRecordedMsg,
+	_, err := session.messageStreamer.WriteMessagesToStream(
+		streamRecordedMsg,
 		streamBeginMsg,
 		playResetMsg,
 		playStartMsg)
+
 	if err != nil {
 		return err
 	}
@@ -427,7 +431,7 @@ func (session *Session) handlePlayCommand(objects []interface{}) error {
 	publisher.AddSubscriber(session.streamChannel, session.sessionId)
 	session.state.Playing = true
 	session.curStream = streamName
-	metaDataMsg := rtmpMsg.NewMessage(publisher.Metadata, rtmpMsg.DataMsg0, session.streamId, COMMAND_MESSAGE_CHUNK_STREAM)
+	metaDataMsg := rtmpMsg.NewMessage(publisher.GetMetadata(), rtmpMsg.DataMsg0, session.streamId, COMMAND_MESSAGE_CHUNK_STREAM)
 	session.messageStreamer.WriteMessageToStream(metaDataMsg)
 
 	//Client cant play audio/video without seqeunce headers (assuming FLV)
@@ -449,7 +453,7 @@ func (session *Session) handlePlayCommand(objects []interface{}) error {
 	return nil
 }
 
-//very incomplete
+//Create a new publisher in the context object if not already publishing and if stream name is unique
 func (session *Session) handlePublishCommand(objects []interface{}) error {
 	if len(objects) < 5 {
 		logger.WarningLog.Printf("Session %d: client sent invalid objects", session.sessionId)
@@ -468,17 +472,28 @@ func (session *Session) handlePublishCommand(objects []interface{}) error {
 		logger.WarningLog.Printf("Session %d: Client attempted publishing without connecting", session.sessionId)
 		return nil
 	}
+	//Stream name should be the 4th object sent in the command
 	streamName, ok := objects[3].(string)
 	if !ok {
 		logger.WarningLog.Printf("Session %d: client sent invalid stream name", session.sessionId)
 		logger.WarningLog.Println("Bad stream name sent", objects[3])
 		return nil
 	}
+	if publisher := session.context.GetPublisher(streamName); publisher != nil {
+		logger.InfoLog.Printf("Session %d attempted publishing stream name that already exists. stream name = %s", session.sessionId, streamName)
+		err := session.messageStreamer.WriteMessageToStream(rtmpMsg.NewStatusMessage("error",
+			"NetStream.Publish.BadName",
+			"Stream name already exists",
+			0))
+		return err
+	}
+	//Getting and setting the publisher should all happen in one transaction. Currently 2 threads could publish at the same time and overwrite one another, since there is no check
+	//in the set publisher method to see if a publisher already exists.
 	session.context.SetStreamName(session.sessionId, streamName)
 	session.context.SetPublisher(streamName, &Publisher{
 		SessionId:   session.sessionId,
 		Subscribers: []Subscriber{},
-		Metadata:    session.ClientMetadata})
+		metadata:    session.ClientMetadata})
 
 	session.messageStreamer.WriteMessageToStream(rtmpMsg.NewStatusMessage(
 		"status",
@@ -562,7 +577,7 @@ func (session *Session) handleDataMessage(data []byte) error {
 	session.ClientMetadata = data
 	if streamName, ok := session.context.GetStreamName(session.sessionId); ok {
 		if publisher := session.context.GetPublisher(streamName); publisher != nil {
-			publisher.Metadata = data
+			publisher.SetMetadata(data)
 			publisher.BroadcastMessage(dataMsg)
 		}
 	}
@@ -638,7 +653,6 @@ func (session *Session) CompleteHandshake() error {
 	conn.WriteByte(clientVersion)
 	rando := make([]byte, S1SIZE)
 	conn.Write(rando)
-	conn.Flush()
 	data := make([]byte, C1SIZE)
 	n, err := conn.Read(data)
 	if err != nil {
@@ -648,7 +662,6 @@ func (session *Session) CompleteHandshake() error {
 		return errors.New("failed to read handshake from client")
 	}
 	conn.Write(data)
-	conn.Flush()
 	n, err = conn.Read(data)
 	if err != nil {
 		return err

@@ -23,7 +23,7 @@ fs.readdir(dir, (err, files) => {
         if (err) throw err;
       });
     }
-  });
+});
 
   let virtualFiles = {}
   let watcher = chokidar.watch(dir);
@@ -40,7 +40,6 @@ fs.readdir(dir, (err, files) => {
           if (err)
               throw err
           virtualFiles[path] = data
-          data
       })
   }
   watcher.on('change', path => {

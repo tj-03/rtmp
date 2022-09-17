@@ -3,16 +3,13 @@ package util
 import (
 	"encoding/binary"
 	"encoding/json"
-	"fmt"
 	"io"
 	"io/ioutil"
 )
 
 type Config struct {
-	ReadTimeoutMs      int    `json:"readTimeoutMs"`
-	WriteTimeoutMs     int    `json:"writeTimeoutMs"`
-	PreferredChunkSize int    `json:"preferredChunkSize"`
-	LogDirectory       string `json:"logDirectory"`
+	InactiveTimeout int    `json:"inactiveTimeout"`
+	LogDirectory    string `json:"logDirectory"`
 }
 
 func CmpSlice(data1 []byte, data2 []byte) bool {
@@ -28,21 +25,19 @@ func CmpSlice(data1 []byte, data2 []byte) bool {
 }
 
 func ReadConfig() (Config, error) {
-	fileData, err := ioutil.ReadFile("C:/Users/josep/Desktop/code_repo/rtmp/logs/log.txt")
+	fileData, err := ioutil.ReadFile("config.json")
 	if err != nil {
 		return Config{}, err
 	}
 
 	var config Config
 	err = json.Unmarshal(fileData, &config)
-	fmt.Println(config)
 	if err != nil {
 		return Config{}, err
 	}
 	return config, nil
 
 }
-
 func CheckConnClosed(conn io.Reader) bool {
 	dat := make([]byte, 1)
 	_, err := conn.Read(dat)

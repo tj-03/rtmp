@@ -3,6 +3,9 @@ package logger
 import (
 	"log"
 	"os"
+	"path"
+
+	"github.com/tj03/rtmp/src/util"
 )
 
 var (
@@ -12,7 +15,10 @@ var (
 )
 
 func init() {
-	file, err := os.OpenFile("C:/Users/josep/Desktop/code_repo/rtmp/logs/log.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
+	config, _ := util.ReadConfig()
+	dir := config.LogDirectory
+
+	file, err := os.OpenFile(path.Join(dir, "log.txt"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
 		log.Fatal(err)
 	}

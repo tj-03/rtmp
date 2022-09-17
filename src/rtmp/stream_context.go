@@ -1,6 +1,7 @@
 package rtmp
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/tj03/rtmp/src/logger"
@@ -8,15 +9,19 @@ import (
 	"github.com/tj03/rtmp/src/util"
 )
 
+//The way rtmp.go used certain methods of the Context/Publisher struct is not thread safe. Get/Set operationsw should be done in a single transaction to avoid multiple sessions overwriting each other
+//Works for now since I can't test with a lot of clients/variablity but theoretically this work improperly in specific scenarios.
+
 //Holds data about the publisher and associated subscribers and provides methods to read/write via RWMutex.
 type Publisher struct {
 	subscriberLock sync.RWMutex
 	aacHeaderLock  sync.RWMutex
 	avcHeaderLock  sync.RWMutex
+	metadataLock   sync.RWMutex
 	SessionId      int
 	Subscribers    []Subscriber
 	//AMF0 Encoded Video MetaData
-	Metadata []byte
+	metadata []byte
 	//AAC and AVC sequence headers MUST be sent to subscriber before sending any video/audio data
 	aacSequenceHeader []byte
 	avcSequenceHeader []byte
@@ -48,24 +53,24 @@ func (ctx *Context) GetPublisher(streamName string) *Publisher {
 
 func (ctx *Context) SetPublisher(streamName string, publisher *Publisher) {
 	ctx.publishersLock.Lock()
-	ctx.publishers[streamName] = publisher
 	ctx.waitListLock.Lock()
+	defer ctx.waitListLock.Unlock()
+	defer ctx.publishersLock.Unlock()
+	ctx.publishers[streamName] = publisher
 	waitList := ctx.waitLists[streamName]
 	if waitList != nil {
 		ctx.publishers[streamName].Subscribers = waitList
 		ctx.waitLists[streamName] = nil
 	}
-	ctx.waitListLock.Unlock()
-	ctx.publishersLock.Unlock()
 }
 
 func (ctx *Context) RemovePublisher(sessionId int) {
 	ctx.publishersLock.Lock()
 	ctx.clientStreamsLock.Lock()
+	defer ctx.clientStreamsLock.Unlock()
+	defer ctx.publishersLock.Unlock()
 	streamName, ok := ctx.clientStreams[sessionId]
 	if !ok {
-		ctx.publishersLock.Unlock()
-		ctx.clientStreamsLock.Unlock()
 		return
 	}
 	publisher := ctx.publishers[streamName]
@@ -76,8 +81,6 @@ func (ctx *Context) RemovePublisher(sessionId int) {
 
 	delete(ctx.publishers, streamName)
 	delete(ctx.clientStreams, sessionId)
-	ctx.clientStreamsLock.Unlock()
-	ctx.publishersLock.Unlock()
 }
 
 func (ctx *Context) GetStreamName(sessionId int) (string, bool) {
@@ -95,17 +98,18 @@ func (ctx *Context) SetStreamName(sessionId int, streamName string) {
 
 func (ctx *Context) AppendToWaitlist(streamName string, subscriber Subscriber) {
 	ctx.waitListLock.Lock()
+	defer ctx.waitListLock.Unlock()
 	waitList := ctx.waitLists[streamName]
 	if waitList == nil {
 		waitList = make([]Subscriber, 0)
 	}
 	waitList = append(waitList, subscriber)
 	ctx.waitLists[streamName] = waitList
-	ctx.waitListLock.Unlock()
 }
 
 func (ctx *Context) RemoveFromWaitlist(sessionId int, streamName string) {
 	ctx.waitListLock.Lock()
+	defer ctx.waitListLock.Unlock()
 	waitList := ctx.waitLists[streamName]
 	filtered := util.FilterSlice(waitList, func(s Subscriber) bool {
 		return s.SessionId == sessionId
@@ -115,55 +119,71 @@ func (ctx *Context) RemoveFromWaitlist(sessionId int, streamName string) {
 	}
 	ctx.waitLists[streamName] = filtered
 
-	ctx.waitListLock.Unlock()
 }
 
 func (publisher *Publisher) AddSubscriber(channel chan MessageResult, sessionId int) {
+	publisher.subscriberLock.Lock()
+	defer publisher.subscriberLock.Unlock()
 	if channel == nil {
 		panic("channel is nil")
 	}
-	publisher.subscriberLock.Lock()
 	publisher.Subscribers = append(publisher.Subscribers, Subscriber{StreamChannel: channel, SessionId: sessionId})
-	publisher.subscriberLock.Unlock()
 }
 
 func (publisher *Publisher) GetSubscribers() []Subscriber {
 	publisher.subscriberLock.RLock()
+	defer publisher.subscriberLock.RUnlock()
 	subs := make([]Subscriber, 0, len(publisher.Subscribers))
 	copy(subs, publisher.Subscribers)
-	publisher.subscriberLock.RUnlock()
 	return subs
 }
 
 func (publisher *Publisher) BroadcastMessage(msg rtmpMsg.Message) {
 	publisher.subscriberLock.RLock()
+	defer publisher.subscriberLock.RUnlock()
 	for i := range publisher.Subscribers {
 		select {
 		case publisher.Subscribers[i].StreamChannel <- MessageResult{msg, nil}:
 
 		default:
-			logger.WarningLog.Printf("Subscriber with id = %d could not process message", publisher.Subscribers[i].SessionId)
-
+			//logger.WarningLog.Printf("Subscriber with id = %d could not process message", publisher.Subscribers[i].SessionId)
+			fmt.Printf("Subscriber with id = %d could not process message\n", publisher.Subscribers[i].SessionId)
 		}
 	}
-	publisher.subscriberLock.RUnlock()
 }
 
 func (publisher *Publisher) SetAACSequenceHeader(seqHeader []byte) {
 	publisher.aacHeaderLock.Lock()
+	defer publisher.aacHeaderLock.Unlock()
 	publisher.aacSequenceHeader = seqHeader
-	publisher.aacHeaderLock.Unlock()
 }
 
 func (publisher *Publisher) GetAACSequenceHeader() []byte {
+	publisher.aacHeaderLock.RLock()
+	defer publisher.aacHeaderLock.RUnlock()
 	if publisher.aacSequenceHeader == nil {
 		return nil
 	}
-	publisher.aacHeaderLock.RLock()
 	seqHeaderCopy := make([]byte, len(publisher.aacSequenceHeader))
 	copy(seqHeaderCopy, publisher.aacSequenceHeader)
-	publisher.aacHeaderLock.RUnlock()
 	return seqHeaderCopy
+}
+
+func (publisher *Publisher) SetMetadata(metadata []byte) {
+	publisher.metadataLock.Lock()
+	defer publisher.metadataLock.Unlock()
+	publisher.metadata = metadata
+}
+
+func (publisher *Publisher) GetMetadata() []byte {
+	publisher.metadataLock.RLock()
+	defer publisher.metadataLock.RUnlock()
+	if publisher.metadata == nil {
+		return nil
+	}
+	metadataCopy := make([]byte, len(publisher.metadata))
+	copy(metadataCopy, publisher.metadata)
+	return metadataCopy
 }
 
 func (publisher *Publisher) SetAVCSequenceHeader(seqHeader []byte) {
@@ -173,18 +193,19 @@ func (publisher *Publisher) SetAVCSequenceHeader(seqHeader []byte) {
 }
 
 func (publisher *Publisher) GetAVCSequenceHeader() []byte {
+	publisher.avcHeaderLock.RLock()
+	defer publisher.avcHeaderLock.RUnlock()
 	if publisher.avcSequenceHeader == nil {
 		return nil
 	}
-	publisher.avcHeaderLock.RLock()
 	seqHeaderCopy := make([]byte, len(publisher.avcSequenceHeader))
 	copy(seqHeaderCopy, publisher.avcSequenceHeader)
-	publisher.avcHeaderLock.RUnlock()
 	return seqHeaderCopy
 }
 
 func (publisher *Publisher) RemoveSubscriber(sessionId int) {
 	publisher.subscriberLock.Lock()
+	defer publisher.subscriberLock.Unlock()
 	filtered := util.FilterSlice(publisher.Subscribers, func(s Subscriber) bool {
 		return s.SessionId == sessionId
 	})
@@ -192,5 +213,4 @@ func (publisher *Publisher) RemoveSubscriber(sessionId int) {
 		logger.WarningLog.Printf("Subscriber with id = %d was not subcribed to publisher with id = %d", sessionId, publisher.SessionId)
 	}
 	publisher.Subscribers = filtered
-	publisher.subscriberLock.Unlock()
 }

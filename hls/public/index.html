@@ -12,7 +12,7 @@
 <!-- Video.js base CSS -->
 
 <link rel = "stylesheet" href = "styles.css"/>
-
+<!-- 
 <script src = "script.js" defer ></script>
 
 
@@ -22,7 +22,8 @@
     </div>
 
 <script>
-    let link = 'https://32b4-24-250-146-149.ngrok.io'
+    let link = ' https://f09d-24-250-146-149.ngrok.io'
+    link = "http://localhost:8000"
     var video = document.getElementById('demoplayer');
     if(Hls.isSupported()) {
         var hlsjsConfig = {
@@ -51,6 +52,19 @@
     else{
         alert("cringe")
     }
+</script> -->
+
+<script src="https://player.live-video.net/1.12.0/amazon-ivs-player.min.js"></script>
+<video controls id="video-player" playsinline></video>
+<script>
+    const PLAYBACK_URL = "http://localhost:8000/live/index.m3u8"
+  if (IVSPlayer.isPlayerSupported) {
+    const player = IVSPlayer.create();
+    player.attachHTMLVideoElement(document.getElementById('video-player'));
+    player.load(PLAYBACK_URL);
+    player.play();
+  }
 </script>
+
 </body>
 </html>

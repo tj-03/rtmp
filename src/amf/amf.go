@@ -1,5 +1,7 @@
 package amf
 
+//AMF Module taken from: https://github.com/speps/go-amf at commit https://github.com/speps/go-amf/tree/bdc4c20b87cfbdd5d5fa7e11aa5665d0aacb7a11
+
 import (
 	"encoding/binary"
 	"io"

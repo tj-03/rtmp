@@ -23,32 +23,23 @@ func createTimestamp() uint32 {
 
 //Command Messages
 
-func (mStreamer *MessageStreamer) Init(conn Connection, chunkSize int) {
+func (mStreamer *MessageStreamer) Init(conn Connection, chunkSize uint32) {
 	mStreamer.chunkStreamer.Init(conn, chunkSize)
 	mStreamer.MessageStreams = make(map[int]int)
 
 }
 
-func verifyChunks(chunks []Chunk, msg Message) bool {
-	acc := []byte{}
-	for _, chunk := range chunks {
-		acc = append(acc, chunk.ChunkData...)
-	}
-	return util.CmpSlice(acc, msg.MessageData)
-}
-func (mStreamer *MessageStreamer) NewChunksFromMessage(msg Message) ([]Chunk, error) {
+func NewChunksFromMessage(msg Message, chunkSize uint32) ([]Chunk, error) {
 	var data []byte
 	originalSize := len(msg.MessageData)
 	var size int
 	cur := 0
-	chunkSize := mStreamer.chunkStreamer.ChunkSize
 	chunks := []Chunk{}
 	chunkStreamId := msg.ChunkStreamId
 
 	for cur < originalSize {
 		remainingSize := originalSize - cur
-		size = util.Min(chunkSize, remainingSize)
-		//chunksLength := len(chunks)
+		size = util.Min(int(chunkSize), remainingSize)
 		var format int
 		messageHeader := ChunkMessageHeader{}
 		if false {
@@ -71,33 +62,33 @@ func (mStreamer *MessageStreamer) NewChunksFromMessage(msg Message) ([]Chunk, er
 		chunk := Chunk{basicHeader, messageHeader, 0, data}
 		chunks = append(chunks, chunk)
 	}
-	// if !verifyChunks(chunks, msg) {
-	// 	cData := []byte{}
-	// 	for _, c := range chunks {
-	// 		cData = append(cData, c.ChunkData...)
-	// 	}
-	// 	logger.ErrorLog.Println("Bad chunk->message conv: Message Len: ", len(msg.MessageData), "Msg dat: ", MessageToString(msg, true))
-	// 	logger.ErrorLog.Println("Bad chunk->message conv: Chunk len: ", len(cData), "Chunk dat:", cData)
-	// 	panic("Bad message to chunk conversion: " + MessageToString(msg, false))
-	// }
 	return chunks, nil
 }
 
-func (mStreamer *MessageStreamer) SetChunkSize(chunkSize int) {
+func (mStreamer *MessageStreamer) SetChunkSize(chunkSize uint32) {
+	if chunkSize == mStreamer.chunkStreamer.ChunkSize {
+		return
+	}
 	mStreamer.chunkStreamer.ChunkSize = chunkSize
 }
 
+func (mStreamer *MessageStreamer) GetChunkSize() uint32 {
+	return mStreamer.chunkStreamer.ChunkSize
+}
+
 func (mStreamer *MessageStreamer) WriteMessageToStream(msg Message) error {
-	chunks, err := mStreamer.NewChunksFromMessage(msg)
+	chunks, err := NewChunksFromMessage(msg, mStreamer.chunkStreamer.ChunkSize)
 	if err != nil {
 		logger.ErrorLog.Fatalln("Error encountered when chunking message", err, msg)
 	}
 	return mStreamer.chunkStreamer.WriteChunksToStream(chunks)
+
 }
 
 func (mStreamer *MessageStreamer) WriteMessagesToStream(messages ...Message) (int, error) {
+
 	for i, msg := range messages {
-		chunks, err := mStreamer.NewChunksFromMessage(msg)
+		chunks, err := NewChunksFromMessage(msg, mStreamer.chunkStreamer.ChunkSize)
 		if err != nil {
 			logger.ErrorLog.Fatalln("Error encountered when chunking message", err, msg)
 		}
@@ -109,7 +100,7 @@ func (mStreamer *MessageStreamer) WriteMessagesToStream(messages ...Message) (in
 }
 
 func (mStreamer *MessageStreamer) ReadMessageFromStream() (Message, error) {
-	cStreamer := mStreamer.chunkStreamer
+	cStreamer := &mStreamer.chunkStreamer
 	chunk, n, err := cStreamer.ReadChunkFromStream()
 	mStreamer.bytesRead += n
 	if err != nil {
@@ -135,14 +126,9 @@ func (mStreamer *MessageStreamer) ReadMessageFromStream() (Message, error) {
 		mStreamer.WriteMessageToStream(NewAckMessage(uint32(mStreamer.bytesRead)))
 		mStreamer.bytesRead = 0
 	}
-	previewSize := len(message.MessageData)
-	if previewSize > 32 {
-		previewSize = 32
-	}
+
 	if msgLength != len(message.MessageData) {
-		l := len(message.MessageData)
-		message.MessageData = message.MessageData[:previewSize]
-		logger.ErrorLog.Println("Message data length not equal to length specified in message header", "Header Length:", msgLength, "Provided Lenght:", l, "Message:", message)
+		logger.ErrorLog.Println("Message data length not equal to length specified in message header. Msg:", MessageToString(message, false))
 	}
 	message.MessageType = msgTypeId
 	message.MessageStreamId = msgStreamId

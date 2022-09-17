@@ -47,21 +47,6 @@ type Chunk struct {
 // func currentTimeStamp() int {
 // 	return 0
 // }
-
-type ChunkStreamer struct {
-	chunkStreams    map[int]ChunkMessageHeader
-	bytesLeftToRead int
-	ChunkSize       int
-	conn            Connection
-}
-
-func (cReader *ChunkStreamer) Init(conn Connection, chunkSize int) {
-	cReader.conn = conn
-	cReader.ChunkSize = chunkSize
-	cReader.bytesLeftToRead = 0
-	cReader.chunkStreams = make(map[int]ChunkMessageHeader)
-}
-
 func ChunksToBytes(chunks []Chunk) ([]byte, error) {
 	if len(chunks) == 0 {
 		return nil, errors.New("empty chunks")
@@ -116,6 +101,20 @@ func ChunksToBytes(chunks []Chunk) ([]byte, error) {
 		bytes = append(bytes, encodedChunk...)
 	}
 	return bytes, nil
+}
+
+type ChunkStreamer struct {
+	chunkStreams    map[int]ChunkMessageHeader
+	bytesLeftToRead int
+	ChunkSize       uint32
+	conn            Connection
+}
+
+func (cStreamer *ChunkStreamer) Init(conn Connection, chunkSize uint32) {
+	cStreamer.conn = conn
+	cStreamer.ChunkSize = chunkSize
+	cStreamer.bytesLeftToRead = 0
+	cStreamer.chunkStreams = make(map[int]ChunkMessageHeader)
 }
 
 func (cStreamer *ChunkStreamer) WriteChunksToStream(chunks []Chunk) error {
@@ -262,7 +261,7 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, int, error) {
 		cReader.bytesLeftToRead = int(chunkMessageHeader.MessageLength)
 	}
 	bytesLeft := cReader.bytesLeftToRead
-	size := util.Min(bytesLeft, chunkPayloadSize)
+	size := util.Min(bytesLeft, int(chunkPayloadSize))
 
 	cReader.bytesLeftToRead -= size
 

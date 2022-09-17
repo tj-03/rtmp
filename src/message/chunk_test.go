@@ -8,25 +8,33 @@ import (
 	"github.com/tj03/rtmp/src/util"
 )
 
+func verifyChunks(chunks []Chunk, msg Message) bool {
+	acc := []byte{}
+	for _, chunk := range chunks {
+		acc = append(acc, chunk.ChunkData...)
+	}
+	return util.CmpSlice(acc, msg.MessageData)
+}
+
 func TestChunkToBytes(t *testing.T) {
 	chunks := []Chunk{
 		{
 			ChunkBasicHeader{0, 2},
-			ChunkMessageHeader{0, 4, 5, 0},
+			ChunkMessageHeader{0, 9, 5, 0},
 			0,
 			[]byte{0, 76, 75, 64}},
 
 		{
 			ChunkBasicHeader{1, 2},
-			ChunkMessageHeader{0, 5, 6, 0},
+			ChunkMessageHeader{0, 9, 5, 0},
 			0,
 			[]byte{0, 76, 75, 64, 2}}}
 	data, err := ChunksToBytes(chunks)
 	if err != nil {
 		t.Fatalf("Chunk parsing failed")
 	}
-	correct1 := []byte{2, 0, 0, 0, 0, 0, 4, 5, 0, 0, 0, 0, 0, 76, 75, 64}
-	correct2 := []byte{66, 0, 0, 0, 0, 0, 5, 6, 0, 76, 75, 64, 2}
+	correct1 := []byte{2, 0, 0, 0, 0, 0, 9, 5, 0, 0, 0, 0, 0, 76, 75, 64}
+	correct2 := []byte{66, 0, 0, 0, 0, 0, 9, 5, 0, 76, 75, 64, 2}
 	if !util.CmpSlice(data, append(correct1, correct2...)) {
 		fmt.Println(data)
 		t.Fatalf("Incorrect")
@@ -61,7 +69,7 @@ func TestChunkToBytesLongMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Chunk parsing failed")
 	}
-	correct1 := []byte{2, 0, 0, 0, 0, 0, 8, 5, 0, 0, 0, 0, 69, 69, 11, 69, 69, 11, 69, 69, 11, 69}
+	correct1 := []byte{2, 0, 0, 0, 0, 0, 8, 5, 0, 0, 0, 0, 69, 69, 194, 69, 69, 194, 69, 69, 194, 69}
 	if !util.CmpSlice(data, correct1) {
 		fmt.Println(data)
 		t.Fatalf("Incorrect")
