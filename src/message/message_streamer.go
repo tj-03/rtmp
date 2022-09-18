@@ -1,6 +1,7 @@
 package message
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/tj03/rtmp/src/logger"
@@ -119,7 +120,9 @@ func (mStreamer *MessageStreamer) ReadMessageFromStream() (Message, error) {
 	}
 
 	if msgLength != len(message.MessageData) {
-		logger.ErrorLog.Println("Message data length not equal to length specified in message header. Msg:", MessageToString(message, false))
+		err := fmt.Errorf("Message data length not equal to length specified in message header. Msg: %s", MessageToString(message, false))
+		logger.ErrorLog.Println(err.Error())
+		return message, err
 	}
 	message.MessageType = msgTypeId
 	message.MessageStreamId = msgStreamId

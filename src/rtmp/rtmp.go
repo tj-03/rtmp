@@ -640,6 +640,7 @@ func (session *Session) disconnect() {
 }
 
 func (session *Session) CompleteHandshake() error {
+	const handshakePacketSize = 1536
 	//RTMPVersion := 3
 	conn := session.conn
 
@@ -650,9 +651,9 @@ func (session *Session) CompleteHandshake() error {
 	}
 	//send S0
 	conn.WriteByte(clientVersion)
-	rando := make([]byte, S1SIZE)
-	conn.Write(rando)
-	data := make([]byte, C1SIZE)
+	randomBytes := make([]byte, handshakePacketSize)
+	conn.Write(randomBytes)
+	data := make([]byte, handshakePacketSize)
 	n, err := conn.Read(data)
 	if err != nil {
 		return err

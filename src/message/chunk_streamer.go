@@ -40,34 +40,25 @@ type Chunk struct {
 	ChunkData         []byte
 }
 
-// func handleExtendedTimestamp() {
-
-// }
-
-// func currentTimeStamp() int {
-// 	return 0
-// }
 func ChunksToBytes(chunks []Chunk) ([]byte, error) {
 	if len(chunks) == 0 {
 		return nil, errors.New("empty chunks")
 	}
 	bytes := []byte{}
-	messageLength := chunks[0].MessageHeader.MessageLength
-	messageTypeId := byte(chunks[0].MessageHeader.MessageTypeId)
-	messageStreamId := uint32(chunks[0].MessageHeader.MessageStreamId)
 
 	for _, chunk := range chunks {
 
 		encodedChunk := []byte{}
 		format := chunk.BasicHeader.Fmt
-		fmtCsid := make([]byte, 1)
-		fmtCsid[0] = format
-		fmtCsid[0] = fmtCsid[0] << 6
 		if format > 3 {
 			return nil, fmt.Errorf("invalid basic header format: fmt value =  %d", format)
 		}
-		chunkStreamId := chunks[0].BasicHeader.ChunkStreamId
-		//1 byte form
+
+		fmtCsid := make([]byte, 1)
+		fmtCsid[0] = format << 6
+		chunkStreamId := chunk.BasicHeader.ChunkStreamId
+
+		//encode fmt/csid
 		if chunkStreamId >= 2 && chunkStreamId <= 63 {
 			fmtCsid[0] |= byte(chunkStreamId)
 		} else if chunkStreamId >= 64 && chunkStreamId <= 319 {
@@ -81,20 +72,24 @@ func ChunksToBytes(chunks []Chunk) ([]byte, error) {
 			return nil, fmt.Errorf("chunk stream id too large %d", chunkStreamId)
 		}
 		encodedChunk = append(encodedChunk, fmtCsid...)
-		timeStamp := uint32(chunk.MessageHeader.Timestamp)
+
+		//encode message header
 		buf := make([]byte, 4)
 		if format <= 2 {
-			binary.BigEndian.PutUint32(buf, timeStamp)
+			//timestamp is 3 bytes
+			binary.BigEndian.PutUint32(buf, chunk.MessageHeader.Timestamp)
 			//make sure this is getting the 3 least signigifcant bytes
 			encodedChunk = append(encodedChunk, buf[1:4]...)
 		}
 		if format <= 1 {
-			binary.BigEndian.PutUint32(buf, uint32(messageLength))
+			//message length is 3 bytes
+			binary.BigEndian.PutUint32(buf, chunk.MessageHeader.MessageLength)
 			encodedChunk = append(encodedChunk, buf[1:4]...)
-			encodedChunk = append(encodedChunk, messageTypeId)
+			encodedChunk = append(encodedChunk, chunk.MessageHeader.MessageTypeId)
 		}
 		if format == 0 {
-			binary.BigEndian.PutUint32(buf, messageStreamId)
+			//message streamId
+			binary.LittleEndian.PutUint32(buf, chunk.MessageHeader.MessageStreamId)
 			encodedChunk = append(encodedChunk, buf...)
 		}
 		encodedChunk = append(encodedChunk, chunk.ChunkData...)
@@ -258,7 +253,7 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, int, error) {
 	//TODO: check if chunksize is greater than REMAINING message size -> have to use previous chunks
 
 	if cReader.bytesLeftToRead < 0 {
-		panic("Bytes left to read < 0")
+		panic("bytes left to read < 0")
 	}
 	if cReader.bytesLeftToRead == 0 {
 		cReader.bytesLeftToRead = int(chunkMessageHeader.MessageLength)
