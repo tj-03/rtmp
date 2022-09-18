@@ -129,7 +129,7 @@ func (session *Session) Run() error {
 	prevPingTime := time.Now()
 	go session.ReadMessages()
 	for {
-		//Deadline necessary to detect errors such as when conn.Read blocks
+		//Deadline necessary to detect errors
 		deadLine := 15
 		session.conn.SetDeadline(time.Now().Add(time.Second * time.Duration(deadLine)))
 
@@ -246,7 +246,7 @@ func (session *Session) HandleMessage(msg rtmpMsg.Message) error {
 //If a publisher sends a unpublish message we should update the session state
 func (session *Session) handleStreamMessage(msg rtmpMsg.Message) error {
 	if msg.MessageType == rtmpMsg.CommandMsg0 {
-		objs, _, err := amf.DecodeBytes(msg.MessageData)
+		objs, _, err := amf.DecodeAMF0Sequence(msg.MessageData)
 		//dont really care if decode doesn't work
 		if err != nil {
 			return nil
@@ -282,7 +282,6 @@ func (session *Session) handleSetWindowAckSize(data []byte) error {
 	if len(data) != 4 {
 		logger.WarningLog.Println("Set window ack sizw payload err - payload length not 4")
 		return errors.New("invalid window size sent")
-
 	}
 	windowSize := binary.BigEndian.Uint32(data[:4])
 	logger.InfoLog.Println("Setting window ack size:", windowSize)
@@ -291,7 +290,7 @@ func (session *Session) handleSetWindowAckSize(data []byte) error {
 }
 
 func (session *Session) handleCommandMessage(data []byte) error {
-	amfObjects, _, _ := amf.DecodeBytes(data)
+	amfObjects, _, _ := amf.DecodeAMF0Sequence(data)
 	if len(amfObjects) == 0 {
 		logger.WarningLog.Println("No objects decoded")
 		return nil
@@ -567,7 +566,7 @@ func (session *Session) handlePauseCommand(objects []interface{}) error {
 }
 
 func (session *Session) handleDataMessage(data []byte) error {
-	objs, _, _ := amf.DecodeBytes(data)
+	objs, _, _ := amf.DecodeAMF0Sequence(data)
 	if len(objs) < 3 {
 		//TODO:handle bad data message
 		return nil
