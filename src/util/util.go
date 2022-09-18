@@ -3,7 +3,6 @@ package util
 import (
 	"encoding/binary"
 	"encoding/json"
-	"io"
 	"io/ioutil"
 )
 
@@ -38,11 +37,7 @@ func ReadConfig() (Config, error) {
 	return config, nil
 
 }
-func CheckConnClosed(conn io.Reader) bool {
-	dat := make([]byte, 1)
-	_, err := conn.Read(dat)
-	return err == io.EOF
-}
+
 func Uint32ToBuf(num uint32) []byte {
 	buf := make([]byte, 4)
 	binary.BigEndian.PutUint32(buf, num)

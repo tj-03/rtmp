@@ -64,7 +64,7 @@ func ChunksToBytes(chunks []Chunk) ([]byte, error) {
 		fmtCsid[0] = format
 		fmtCsid[0] = fmtCsid[0] << 6
 		if format > 3 {
-			logger.ErrorLog.Fatalln("FMT value > 3: fmt = ", format)
+			return nil, fmt.Errorf("invalid basic header format: fmt value =  %d", format)
 		}
 		chunkStreamId := chunks[0].BasicHeader.ChunkStreamId
 		//1 byte form
@@ -186,7 +186,8 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, int, error) {
 			return Chunk{}, bytesRead, err
 		}
 		if n != headerSize {
-			logger.ErrorLog.Fatalln("Header read improperly", data, n)
+			logger.ErrorLog.Println("Header read improperly", data, n)
+			return Chunk{}, bytesRead, fmt.Errorf("header read improperly")
 		}
 		timestamp := binary.BigEndian.Uint32(append([]byte{0}, data[0:3]...))
 		chunkMessageHeader.Timestamp = timestamp
@@ -206,7 +207,8 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, int, error) {
 			return Chunk{}, bytesRead, err
 		}
 		if n != headerSize {
-			logger.ErrorLog.Fatalln("Header read improperly", data, n)
+			logger.ErrorLog.Println("Header read improperly", data, n)
+			return Chunk{}, bytesRead, fmt.Errorf("header read improperly")
 		}
 		timestamp := binary.BigEndian.Uint32(append([]byte{0}, data[0:3]...))
 		chunkMessageHeader.Timestamp = timestamp
@@ -227,7 +229,8 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, int, error) {
 			return Chunk{}, bytesRead, err
 		}
 		if n != headerSize {
-			logger.ErrorLog.Fatalln("Header read improperly", data, n)
+			logger.ErrorLog.Println("Header read improperly", data, n)
+			return Chunk{}, bytesRead, fmt.Errorf("header read improperly")
 		}
 		if header, ok := cReader.chunkStreams[int(csid)]; ok {
 			chunkMessageHeader = header

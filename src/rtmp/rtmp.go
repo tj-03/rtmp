@@ -236,7 +236,7 @@ func (session *Session) HandleMessage(msg rtmpMsg.Message) error {
 		//do nothing
 
 	default:
-		logger.ErrorLog.Fatalln("Unimplemented message type", msg.MessageType)
+		logger.ErrorLog.Println("Unhandled message  - type unkown. type =", msg.MessageType)
 	}
 
 	return err

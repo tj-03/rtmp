@@ -29,7 +29,7 @@ func (mStreamer *MessageStreamer) Init(conn Connection, chunkSize uint32) {
 
 }
 
-func NewChunksFromMessage(msg Message, chunkSize uint32) ([]Chunk, error) {
+func NewChunksFromMessage(msg Message, chunkSize uint32) []Chunk {
 	var data []byte
 	originalSize := len(msg.MessageData)
 	var size int
@@ -42,7 +42,7 @@ func NewChunksFromMessage(msg Message, chunkSize uint32) ([]Chunk, error) {
 		size = util.Min(int(chunkSize), remainingSize)
 		var format int
 		messageHeader := ChunkMessageHeader{}
-		if false {
+		if len(chunks) > 0 {
 			format = 3
 			messageHeader = chunks[0].MessageHeader
 		} else {
@@ -62,13 +62,10 @@ func NewChunksFromMessage(msg Message, chunkSize uint32) ([]Chunk, error) {
 		chunk := Chunk{basicHeader, messageHeader, 0, data}
 		chunks = append(chunks, chunk)
 	}
-	return chunks, nil
+	return chunks
 }
 
 func (mStreamer *MessageStreamer) SetChunkSize(chunkSize uint32) {
-	if chunkSize == mStreamer.chunkStreamer.ChunkSize {
-		return
-	}
 	mStreamer.chunkStreamer.ChunkSize = chunkSize
 }
 
@@ -77,10 +74,7 @@ func (mStreamer *MessageStreamer) GetChunkSize() uint32 {
 }
 
 func (mStreamer *MessageStreamer) WriteMessageToStream(msg Message) error {
-	chunks, err := NewChunksFromMessage(msg, mStreamer.chunkStreamer.ChunkSize)
-	if err != nil {
-		logger.ErrorLog.Fatalln("Error encountered when chunking message", err, msg)
-	}
+	chunks := NewChunksFromMessage(msg, mStreamer.chunkStreamer.ChunkSize)
 	return mStreamer.chunkStreamer.WriteChunksToStream(chunks)
 
 }
@@ -88,11 +82,8 @@ func (mStreamer *MessageStreamer) WriteMessageToStream(msg Message) error {
 func (mStreamer *MessageStreamer) WriteMessagesToStream(messages ...Message) (int, error) {
 
 	for i, msg := range messages {
-		chunks, err := NewChunksFromMessage(msg, mStreamer.chunkStreamer.ChunkSize)
-		if err != nil {
-			logger.ErrorLog.Fatalln("Error encountered when chunking message", err, msg)
-		}
-		if err = mStreamer.chunkStreamer.WriteChunksToStream(chunks); err != nil {
+		chunks := NewChunksFromMessage(msg, mStreamer.chunkStreamer.ChunkSize)
+		if err := mStreamer.chunkStreamer.WriteChunksToStream(chunks); err != nil {
 			return i + 1, err
 		}
 	}
