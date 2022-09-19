@@ -5,7 +5,7 @@ import (
 	"sync"
 
 	"github.com/tj03/rtmp/src/logger"
-	rtmpMsg "github.com/tj03/rtmp/src/message"
+	rtmpMsg "github.com/tj03/rtmp/src/messaging"
 	"github.com/tj03/rtmp/src/util"
 )
 

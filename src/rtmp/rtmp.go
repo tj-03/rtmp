@@ -9,7 +9,7 @@ import (
 
 	"github.com/tj03/rtmp/src/amf"
 	"github.com/tj03/rtmp/src/logger"
-	rtmpMsg "github.com/tj03/rtmp/src/message"
+	rtmpMsg "github.com/tj03/rtmp/src/messaging"
 )
 
 var COMMAND_MESSAGE_CHUNK_STREAM = 3
