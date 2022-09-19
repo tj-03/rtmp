@@ -123,10 +123,6 @@ func (cStreamer *ChunkStreamer) WriteChunksToStream(chunks []Chunk) error {
 		logger.ErrorLog.Println(err)
 		return err
 	}
-	if err != nil {
-		logger.ErrorLog.Println(err)
-		return err
-	}
 	return nil
 }
 

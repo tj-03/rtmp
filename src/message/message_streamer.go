@@ -15,10 +15,7 @@ type MessageStreamer struct {
 	bytesRead        int
 }
 
-var t uint32
-
 func createTimestamp() uint32 {
-	t += 200
 	return uint32(time.Now().UnixMilli())
 }
 

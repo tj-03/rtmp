@@ -133,7 +133,7 @@ func decodeAMFObject(data []byte) (map[string]interface{}, int, error) {
 			if data[offset] == amfObjEnd {
 				return object, offset + 1, nil
 			} else {
-				panic("uh empty string but not end of object")
+				return nil, offset, errors.New("invalid object ending")
 			}
 		}
 		val, bytesRead, err := DecodeAMF0Value(data[offset:])

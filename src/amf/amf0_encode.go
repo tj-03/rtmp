@@ -2,7 +2,6 @@ package amf
 
 import (
 	"encoding/binary"
-	"fmt"
 	"math"
 )
 
@@ -30,8 +29,8 @@ func encodeAMFValue(untypedVal interface{}) []byte {
 	case map[string]interface{}:
 		return encodeAMFObj(val)
 	}
-	panic(fmt.Sprintln("unkown type", untypedVal))
-	//return nil
+	//panic(fmt.Sprintln("unkown type", untypedVal))
+	return nil
 }
 
 func encodeAMFFloat64(num float64) []byte {
