@@ -6,17 +6,6 @@ import (
 	"math"
 )
 
-const (
-	amfNumberType    byte = 0
-	amfBoolType      byte = 1
-	amfStringType    byte = 2
-	amfObjectType    byte = 3
-	amfNullType      byte = 5
-	amfUndefinedType byte = 6
-	amfArrType       byte = 8
-	amfObjEnd        byte = 9
-)
-
 func DecodeAMF0Sequence(data []byte) ([]interface{}, int, error) {
 	offset := 0
 	result := []interface{}{}
@@ -78,7 +67,7 @@ func decodeAMFBool(data []byte) (bool, int, error) {
 	if len(data) < 1 {
 		return false, 0, errors.New("invalid amf bool type")
 	}
-	return data[0] != 1, 1, nil
+	return data[0] != 0, 1, nil
 }
 
 func decodeAMFString(data []byte) (string, int, error) {
