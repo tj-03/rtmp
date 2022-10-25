@@ -166,7 +166,7 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, int, error) {
 	chunkBasicHeader.ChunkStreamId = uint64(csid)
 
 	var chunkMessageHeader ChunkMessageHeader
-	//TODO: handle other fmt values
+
 	switch format {
 	case 0:
 		headerSize := 11
@@ -246,7 +246,6 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, int, error) {
 	chunk := Chunk{
 		BasicHeader:   chunkBasicHeader,
 		MessageHeader: chunkMessageHeader}
-	//TODO: check if chunksize is greater than REMAINING message size -> have to use previous chunks
 
 	if cReader.bytesLeftToRead < 0 {
 		panic("bytes left to read < 0")

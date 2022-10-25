@@ -330,34 +330,14 @@ func (session *Session) handleConnectCommand(objects []interface{}) error {
 
 	response := amf.EncodeAMF0(result, 1, props, info)
 
-	winAckMsg := rtmpMsg.NewWinAckMessage(5000000)
-	setBandwidthMsg := rtmpMsg.NewSetPeerBandwidthMessage(5000000, 2)
-	streamBeginMsg := rtmpMsg.NewStreamBeginMessage(0)
-	chunkSize := session.messageStreamer.GetChunkSize()
-	setChunkMsg := rtmpMsg.NewSetChunkSizeMessage(chunkSize)
+	_, err := session.messageStreamer.WriteMessagesToStream(
+		rtmpMsg.NewWinAckMessage(5000000),
+		rtmpMsg.NewSetPeerBandwidthMessage(5000000, 2),
+		rtmpMsg.NewStreamBeginMessage(0),
+		rtmpMsg.NewSetChunkSizeMessage(session.messageStreamer.GetChunkSize()),
+		rtmpMsg.NewCommandMessage0(response, 0))
 
-	logger.InfoLog.Println("Writing window ack bytes to stream", winAckMsg)
-	if err := session.messageStreamer.WriteMessageToStream(winAckMsg); err != nil {
-		return err
-	}
-
-	logger.InfoLog.Println("Writing set bandwidth message", setBandwidthMsg)
-	if err := session.messageStreamer.WriteMessageToStream(setBandwidthMsg); err != nil {
-		return err
-	}
-
-	logger.InfoLog.Println("Writing set chunk size message", setChunkMsg)
-	if err := session.messageStreamer.WriteMessageToStream(setChunkMsg); err != nil {
-		return err
-	}
-
-	logger.InfoLog.Println("Writing stream begin message")
-	if err := session.messageStreamer.WriteMessageToStream(streamBeginMsg); err != nil {
-		return err
-	}
-	resMsg := rtmpMsg.NewCommandMessage0(response, 0)
-	logger.InfoLog.Println("Writing connect response", resMsg)
-	if err := session.messageStreamer.WriteMessageToStream(resMsg); err != nil {
+	if err != nil {
 		return err
 	}
 	session.state.Connected = true
@@ -406,17 +386,13 @@ func (session *Session) handlePlayCommand(objects []interface{}) error {
 		session.context.AppendToWaitlist(streamName, Subscriber{session.streamChannel, session.sessionId})
 		return nil
 	}
-	session.messageStreamer.WriteMessageToStream(rtmpMsg.NewSetChunkSizeMessage(session.messageStreamer.GetChunkSize()))
 
-	streamRecordedMsg := rtmpMsg.NewStreamIsRecordedMessage(uint32(session.streamId))
-	streamBeginMsg := rtmpMsg.NewStreamBeginMessage(uint32(session.streamId))
-	playResetMsg := rtmpMsg.NewStatusMessage("status", "NetStream.Play.Reset", "Playing and resetting stream")
-	playStartMsg := rtmpMsg.NewStatusMessage("status", "NetStream.Play.Start", "Started playing stream.")
 	_, err := session.messageStreamer.WriteMessagesToStream(
-		streamRecordedMsg,
-		streamBeginMsg,
-		playResetMsg,
-		playStartMsg)
+		rtmpMsg.NewSetChunkSizeMessage(session.messageStreamer.GetChunkSize()),
+		rtmpMsg.NewStreamIsRecordedMessage(uint32(session.streamId)),
+		rtmpMsg.NewStreamBeginMessage(uint32(session.streamId)),
+		rtmpMsg.NewStatusMessage("status", "NetStream.Play.Reset", "Playing and resetting stream"),
+		rtmpMsg.NewStatusMessage("status", "NetStream.Play.Start", "Started playing stream."))
 
 	if err != nil {
 		return err
@@ -553,7 +529,6 @@ func (session *Session) handlePauseCommand(objects []interface{}) error {
 func (session *Session) handleDataMessage(data []byte) error {
 	objs, _, _ := amf.DecodeAMF0Sequence(data)
 	if len(objs) < 3 {
-		//TODO:handle bad data message
 		return nil
 	}
 	encodedDataObj := amf.EncodeAMF0("onMetaData", objs[2])
