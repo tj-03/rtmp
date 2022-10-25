@@ -6,10 +6,6 @@ This is an implementation of RTMP written in Go. As of now it can take in and pr
 
 There is also a simple Javascript HLS server to watch the stream in a browser.
 
-### Status
-
-Currently the server works fine but there are potential concurrency issues that have not yet been worked on. 
-
 ## How to use
 Clone the repo and simply run 
 ```sh
