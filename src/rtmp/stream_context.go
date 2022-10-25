@@ -1,7 +1,6 @@
 package rtmp
 
 import (
-	"fmt"
 	"sync"
 
 	"github.com/tj03/rtmp/src/logger"
@@ -9,8 +8,8 @@ import (
 	"github.com/tj03/rtmp/src/util"
 )
 
-//The way rtmp.go used certain methods of the Context/Publisher struct is not thread safe. Get/Set operationsw should be done in a single transaction to avoid multiple sessions overwriting each other
-//Works for now since I can't test with a lot of clients/variablity but theoretically this work improperly in specific scenarios.
+//The way rtmp.go uses certain methods of the Context/Publisher struct is not thread safe. Get/Set operationsw should be done in a single transaction to avoid multiple sessions overwriting each other
+//Works for now since I can't test with a lot of clients/variablity but theoretically this works improperly in specific scenarios.
 
 //Holds data about the publisher and associated subscribers and provides methods to read/write via RWMutex.
 type Publisher struct {
@@ -77,7 +76,7 @@ func (ctx *Context) RemovePublisher(sessionId int) {
 	if publisher == nil {
 		panic("Stream name set but clientstream not set")
 	}
-	publisher.BroadcastMessage(rtmpMsg.NewStatusMessage("status", "NetStream.Play.UnpublishNotify", "Stream unpublished", COMMAND_MESSAGE_CHUNK_STREAM))
+	publisher.BroadcastMessage(rtmpMsg.NewStatusMessage("status", "NetStream.Play.UnpublishNotify", "Stream unpublished"))
 
 	delete(ctx.publishers, streamName)
 	delete(ctx.clientStreams, sessionId)
@@ -147,7 +146,7 @@ func (publisher *Publisher) BroadcastMessage(msg rtmpMsg.Message) {
 
 		default:
 			//logger.WarningLog.Printf("Subscriber with id = %d could not process message", publisher.Subscribers[i].SessionId)
-			fmt.Printf("Subscriber with id = %d could not process message\n", publisher.Subscribers[i].SessionId)
+			//fmt.Printf("Subscriber with id = %d could not process message\n", publisher.Subscribers[i].SessionId)
 		}
 	}
 }

@@ -14,7 +14,7 @@
 *.txt
 *.json
 node_modules
-videos
+videos*
 
 # Dependency directories (remove the comment below to include it)
 # vendor/

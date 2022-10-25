@@ -12,11 +12,6 @@ import (
 	rtmpMsg "github.com/tj03/rtmp/src/messaging"
 )
 
-var COMMAND_MESSAGE_CHUNK_STREAM = 3
-var VIDEO_MESSAGE_CHUNK_STREAM = 6
-var AUDIO_MESSAGE_CHUNK_STREAM = 7
-var DATA_MESSAGE_CHUNK_STREAM = 8
-
 type Server struct {
 	//change to arr?
 	context      *Context
@@ -110,7 +105,7 @@ type MessageResult struct {
 func (session *Session) HandleConnection(conn *Connection) error {
 	defer session.disconnect()
 	session.messageChannel = make(chan MessageResult, 4)
-	session.streamChannel = make(chan MessageResult, 32)
+	session.streamChannel = make(chan MessageResult, 4096)
 	session.streamId = 6
 	session.conn = conn
 	if err := session.CompleteHandshake(); err != nil {
@@ -360,7 +355,7 @@ func (session *Session) handleConnectCommand(objects []interface{}) error {
 	if err := session.messageStreamer.WriteMessageToStream(streamBeginMsg); err != nil {
 		return err
 	}
-	resMsg := rtmpMsg.NewCommandMessage0(response, 0, COMMAND_MESSAGE_CHUNK_STREAM)
+	resMsg := rtmpMsg.NewCommandMessage0(response, 0)
 	logger.InfoLog.Println("Writing connect response", resMsg)
 	if err := session.messageStreamer.WriteMessageToStream(resMsg); err != nil {
 		return err
@@ -385,7 +380,7 @@ func (session *Session) handleCreateStreamCommand(objects []interface{}) error {
 		//session.streamCount++
 	}
 
-	cmdMsg := rtmpMsg.NewCommandMessage0(responseData, 0, COMMAND_MESSAGE_CHUNK_STREAM)
+	cmdMsg := rtmpMsg.NewCommandMessage0(responseData, 0)
 	logger.InfoLog.Println("Sending create stream response.")
 	err := session.messageStreamer.WriteMessageToStream(cmdMsg)
 	return err
@@ -415,8 +410,8 @@ func (session *Session) handlePlayCommand(objects []interface{}) error {
 
 	streamRecordedMsg := rtmpMsg.NewStreamIsRecordedMessage(uint32(session.streamId))
 	streamBeginMsg := rtmpMsg.NewStreamBeginMessage(uint32(session.streamId))
-	playResetMsg := rtmpMsg.NewStatusMessage("status", "NetStream.Play.Reset", "Playing and resetting stream", session.streamId)
-	playStartMsg := rtmpMsg.NewStatusMessage("status", "NetStream.Play.Start", "Started playing stream.", session.streamId)
+	playResetMsg := rtmpMsg.NewStatusMessage("status", "NetStream.Play.Reset", "Playing and resetting stream")
+	playStartMsg := rtmpMsg.NewStatusMessage("status", "NetStream.Play.Start", "Started playing stream.")
 	_, err := session.messageStreamer.WriteMessagesToStream(
 		streamRecordedMsg,
 		streamBeginMsg,
@@ -430,19 +425,19 @@ func (session *Session) handlePlayCommand(objects []interface{}) error {
 	publisher.AddSubscriber(session.streamChannel, session.sessionId)
 	session.state.Playing = true
 	session.curStream = streamName
-	metaDataMsg := rtmpMsg.NewMessage(publisher.GetMetadata(), rtmpMsg.DataMsg0, session.streamId, COMMAND_MESSAGE_CHUNK_STREAM)
+	metaDataMsg := rtmpMsg.NewMetaDataMessage(publisher.GetMetadata(), session.streamId)
 	session.messageStreamer.WriteMessageToStream(metaDataMsg)
 
 	//Client cant play audio/video without seqeunce headers (assuming FLV)
 	if aacSeqHeader := publisher.GetAACSequenceHeader(); aacSeqHeader != nil {
-		aacMsg := rtmpMsg.NewMessage(aacSeqHeader, rtmpMsg.AudioMsg, session.streamId, AUDIO_MESSAGE_CHUNK_STREAM)
+		aacMsg := rtmpMsg.NewAudioMessage(aacSeqHeader, session.streamId)
 		err := session.messageStreamer.WriteMessageToStream(aacMsg)
 		if err != nil {
 			return err
 		}
 	}
 	if avcSeqHeader := publisher.GetAVCSequenceHeader(); avcSeqHeader != nil {
-		avcMsg := rtmpMsg.NewMessage(avcSeqHeader, rtmpMsg.VideoMsg, session.streamId, VIDEO_MESSAGE_CHUNK_STREAM)
+		avcMsg := rtmpMsg.NewVideoMessage(avcSeqHeader, session.streamId)
 		err := session.messageStreamer.WriteMessageToStream(avcMsg)
 		if err != nil {
 			return err
@@ -463,8 +458,7 @@ func (session *Session) handlePublishCommand(objects []interface{}) error {
 	if ok {
 		err := session.messageStreamer.WriteMessageToStream(rtmpMsg.NewStatusMessage("error",
 			"NetStream.Publish.BadConnection",
-			"Connection already publishing",
-			0))
+			"Connection already publishing"))
 		return err
 	}
 	if !session.state.Connected {
@@ -482,8 +476,7 @@ func (session *Session) handlePublishCommand(objects []interface{}) error {
 		logger.InfoLog.Printf("Session %d attempted publishing stream name that already exists. stream name = %s", session.sessionId, streamName)
 		err := session.messageStreamer.WriteMessageToStream(rtmpMsg.NewStatusMessage("error",
 			"NetStream.Publish.BadName",
-			"Stream name already exists",
-			0))
+			"Stream name already exists"))
 		return err
 	}
 	//Getting and setting the publisher should all happen in one transaction. Currently 2 threads could publish at the same time and overwrite one another, since there is no check
@@ -497,8 +490,7 @@ func (session *Session) handlePublishCommand(objects []interface{}) error {
 	session.messageStreamer.WriteMessageToStream(rtmpMsg.NewStatusMessage(
 		"status",
 		"NetStream.Publish.Start",
-		"Stream published",
-		0))
+		"Stream published"))
 
 	return nil
 }
@@ -526,8 +518,7 @@ func (session *Session) handlePauseCommand(objects []interface{}) error {
 		}
 		pauseMsg := rtmpMsg.NewStatusMessage("status",
 			"NetStream.Pause.Notify",
-			"Stream paused",
-			COMMAND_MESSAGE_CHUNK_STREAM)
+			"Stream paused")
 		if err := session.messageStreamer.WriteMessageToStream(pauseMsg); err != nil {
 			return err
 		}
@@ -540,13 +531,13 @@ func (session *Session) handlePauseCommand(objects []interface{}) error {
 		if publisher := session.context.GetPublisher(session.curStream); publisher != nil {
 
 			if aacSeqHeader := publisher.GetAACSequenceHeader(); aacSeqHeader != nil {
-				aacHeaderMsg := rtmpMsg.NewMessage(aacSeqHeader, rtmpMsg.AudioMsg, session.streamId, AUDIO_MESSAGE_CHUNK_STREAM)
+				aacHeaderMsg := rtmpMsg.NewAudioMessage(aacSeqHeader, session.streamId)
 				if err := session.messageStreamer.WriteMessageToStream(aacHeaderMsg); err != nil {
 					return err
 				}
 			}
 			if avcSeqHeader := publisher.GetAVCSequenceHeader(); avcSeqHeader != nil {
-				avcHeaderMsg := rtmpMsg.NewMessage(avcSeqHeader, rtmpMsg.VideoMsg, session.streamId, VIDEO_MESSAGE_CHUNK_STREAM)
+				avcHeaderMsg := rtmpMsg.NewVideoMessage(avcSeqHeader, session.streamId)
 				if err := session.messageStreamer.WriteMessageToStream(avcHeaderMsg); err != nil {
 					return err
 				}
@@ -555,8 +546,7 @@ func (session *Session) handlePauseCommand(objects []interface{}) error {
 		}
 		unpauseMsg := rtmpMsg.NewStatusMessage("status",
 			"NetStream.Unause.Notify",
-			"Stream resumed",
-			COMMAND_MESSAGE_CHUNK_STREAM)
+			"Stream resumed")
 		if err := session.messageStreamer.WriteMessageToStream(unpauseMsg); err != nil {
 			return err
 		}
@@ -572,7 +562,7 @@ func (session *Session) handleDataMessage(data []byte) error {
 		return nil
 	}
 	encodedDataObj := amf.EncodeAMF0("onMetaData", objs[2])
-	dataMsg := rtmpMsg.NewCommandMessage0(encodedDataObj, 0, COMMAND_MESSAGE_CHUNK_STREAM)
+	dataMsg := rtmpMsg.NewCommandMessage0(encodedDataObj, 0)
 	session.ClientMetadata = data
 	if streamName, ok := session.context.GetStreamName(session.sessionId); ok {
 		if publisher := session.context.GetPublisher(streamName); publisher != nil {
@@ -598,7 +588,7 @@ func (session *Session) handleAudioMessage(data []byte) error {
 			if isSequenceHeader {
 				publisher.SetAACSequenceHeader(data)
 			}
-			msg := rtmpMsg.NewMessage(data, rtmpMsg.AudioMsg, session.streamId, AUDIO_MESSAGE_CHUNK_STREAM)
+			msg := rtmpMsg.NewAudioMessage(data, session.streamId)
 			publisher.BroadcastMessage(msg)
 		}
 	}
@@ -619,7 +609,7 @@ func (session *Session) handleVideoMessage(data []byte) error {
 			if isSequenceHeader {
 				publisher.SetAVCSequenceHeader(data)
 			}
-			msg := rtmpMsg.NewMessage(data, rtmpMsg.VideoMsg, session.streamId, VIDEO_MESSAGE_CHUNK_STREAM)
+			msg := rtmpMsg.NewVideoMessage(data, session.streamId)
 			publisher.BroadcastMessage(msg)
 		}
 	}

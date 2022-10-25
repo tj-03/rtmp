@@ -41,13 +41,13 @@ func encodeAMFFloat64(num float64) []byte {
 	return buf
 }
 func encodeAMFBool(boolVal bool) []byte {
-	var boolNum int
+	var boolNum byte
 	if boolVal {
 		boolNum = 1
 	} else {
 		boolNum = 0
 	}
-	return []byte{amfBoolType, byte(boolNum)}
+	return []byte{amfBoolType, boolNum}
 
 }
 

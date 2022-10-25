@@ -35,6 +35,11 @@ const (
 	AggregateMsg     MessageType = 22
 )
 
+var COMMAND_MESSAGE_CHUNK_STREAM = 3
+var VIDEO_MESSAGE_CHUNK_STREAM = 6
+var AUDIO_MESSAGE_CHUNK_STREAM = 7
+var DATA_MESSAGE_CHUNK_STREAM = 8
+
 const (
 	StreamBegin EventType = iota
 	StreamEOF
@@ -53,11 +58,16 @@ type Message struct {
 	ChunkStreamId   int
 }
 
-func NewCommandMessage0(data []byte, msgStreamId int, chunkStreamId int) Message {
-	return NewMessage(data, CommandMsg0, msgStreamId, chunkStreamId)
+//Command Messages
+func NewCommandMessage0(data []byte, msgStreamId int) Message {
+	return NewMessage(data, CommandMsg0, msgStreamId, COMMAND_MESSAGE_CHUNK_STREAM)
 }
 
-func NewStatusMessage(level string, code string, description string, msgStreamId int) Message {
+func NewMetaDataMessage(data []byte, msgStreamId int) Message {
+	return NewMessage(data, DataMsg0, msgStreamId, COMMAND_MESSAGE_CHUNK_STREAM)
+}
+
+func NewStatusMessage(level string, code string, description string) Message {
 	if level != "status" && level != "warning" && level != "error" {
 		panic("invalid level string for status message")
 	}
@@ -65,7 +75,7 @@ func NewStatusMessage(level string, code string, description string, msgStreamId
 		"level":       level,
 		"code":        code,
 		"description": description})
-	return NewCommandMessage0(msgData, msgStreamId, 3)
+	return NewCommandMessage0(msgData, COMMAND_MESSAGE_CHUNK_STREAM)
 }
 
 //Protocol Control Messages
@@ -115,6 +125,15 @@ func NewPingMsg(pingTime time.Time, streamId int) Message {
 	buf := util.Uint16ToBuf(uint16(PingRequest))
 	buf = append(buf, util.Uint32ToBuf(uint32(pingTime.UnixMilli()))...)
 	return NewMessage(buf, UserControl, int(streamId), 2)
+}
+
+//Video/Audio
+func NewVideoMessage(data []byte, msgStreamId int) Message {
+	return Message{VideoMsg, data, msgStreamId, VIDEO_MESSAGE_CHUNK_STREAM}
+}
+
+func NewAudioMessage(data []byte, msgStreamId int) Message {
+	return Message{AudioMsg, data, msgStreamId, AUDIO_MESSAGE_CHUNK_STREAM}
 }
 
 func NewMessage(data []byte, msgTypeId MessageType, msgStreamId int, chunkStreamId int) Message {

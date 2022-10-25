@@ -14,16 +14,24 @@ var corsOptions = {
     origin: '*',
   }
 
-let dir = __dirname + "\\public\\videos\\";
-fs.readdir(dir, (err, files) => {
-    if (err) throw err;
-  
-    for (const file of files) {
-      fs.unlink(dir + file, err => {
-        if (err) throw err;
-      });
-    }
-});
+const NUM_CLIENTS = 1;
+for (let i = 0; i < NUM_CLIENTS; i++){
+
+        try {
+            fs.rmdirSync(__dirname + "\\public\\videos"+i, {recursive:true})
+        } catch (err) {
+        }
+        try {
+            fs.mkdirSync(__dirname + "\\public\\videos"+i)
+        } catch (err) {
+        }
+    
+
+}
+
+
+let dir = __dirname + "\\public\\videos0\\";
+
 
   let virtualFiles = {}
   let watcher = chokidar.watch(dir);
@@ -56,15 +64,18 @@ fs.readdir(dir, (err, files) => {
   
   })
 
-ffmpeg('rtmp://'+host+':'+port+path, { timeout: 432000 }).addOptions([
-    '-c:v copy',
-    '-c:a aac',
-    '-hls_time 2',
-    '-hls_list_size 10',
-    '-hls_flags delete_segments',
-    '-hls_delete_threshold 12',
-    '-start_number 1'
-  ]).output('public/videos/index.m3u8').on("error",console.log).run()
+for (let i = 0; i < NUM_CLIENTS; i = i + 1) {
+
+    ffmpeg('rtmp://'+host+':'+port+path, { timeout: 432000 }).addOptions([
+        '-c:v copy',
+        '-c:a copy',
+        '-hls_time 2',
+        '-hls_list_size 10',
+        '-hls_flags delete_segments',
+        '-hls_delete_threshold 12',
+        '-start_number 1'
+      ]).output(`public/videos${i}/index.m3u8`).on("error",!i ? console.log : ()=>{}).run()
+}
 // var child_process = require('child_process');
 
 // child_process.exec(__dirname + '\\vid.bat', function(error, stdout, stderr) {
@@ -78,7 +89,7 @@ app.get('/live/:fname', (req, res) => {
     console.log("Endpoint hit")
     let fname = req.params.fname;
     console.log(fname)
-    fname = __dirname + "\\public\\videos\\" + fname
+    fname = __dirname + "\\public\\videos0\\" + fname
     console.log("dir",fname)
     try{
         res.end(virtualFiles[fname], 'binary')
