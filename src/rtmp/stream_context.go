@@ -8,9 +8,6 @@ import (
 	"github.com/tj03/rtmp/src/util"
 )
 
-//The way rtmp.go uses certain methods of the Context/Publisher struct is not thread safe. Get/Set operationsw should be done in a single transaction to avoid multiple sessions overwriting each other
-//Works for now since I can't test with a lot of clients/variablity but theoretically this works improperly in specific scenarios.
-
 //Holds data about the publisher and associated subscribers and provides methods to read/write via RWMutex.
 type Publisher struct {
 	subscriberLock sync.RWMutex
@@ -43,24 +40,36 @@ type Context struct {
 	publishers map[string]*Publisher
 }
 
+//Creates a publisher. Returns false if unsuccesful(streamname already exists) , true otherwise.
+func (ctx *Context) CreateStream(sessionId int, streamName string, metaData []byte) bool {
+	ctx.publishersLock.Lock()
+	ctx.clientStreamsLock.Lock()
+	ctx.waitListLock.Lock()
+	defer ctx.publishersLock.Unlock()
+	defer ctx.clientStreamsLock.Unlock()
+	defer ctx.waitListLock.Unlock()
+	if publisher := ctx.publishers[streamName]; publisher != nil {
+		return false
+	}
+	ctx.clientStreams[sessionId] = streamName
+	waitList := ctx.waitLists[streamName]
+	ctx.waitLists[streamName] = nil
+	if waitList == nil {
+		waitList = []Subscriber{}
+	}
+	ctx.publishers[streamName] = &Publisher{
+		SessionId:   sessionId,
+		Subscribers: waitList,
+		metadata:    metaData}
+
+	return true
+}
+
 func (ctx *Context) GetPublisher(streamName string) *Publisher {
 	ctx.publishersLock.RLock()
 	publisher := ctx.publishers[streamName]
 	ctx.publishersLock.RUnlock()
 	return publisher
-}
-
-func (ctx *Context) SetPublisher(streamName string, publisher *Publisher) {
-	ctx.publishersLock.Lock()
-	ctx.waitListLock.Lock()
-	defer ctx.waitListLock.Unlock()
-	defer ctx.publishersLock.Unlock()
-	ctx.publishers[streamName] = publisher
-	waitList := ctx.waitLists[streamName]
-	if waitList != nil {
-		ctx.publishers[streamName].Subscribers = waitList
-		ctx.waitLists[streamName] = nil
-	}
 }
 
 func (ctx *Context) RemovePublisher(sessionId int) {
@@ -89,12 +98,6 @@ func (ctx *Context) GetStreamName(sessionId int) (string, bool) {
 	return streamName, ok
 }
 
-func (ctx *Context) SetStreamName(sessionId int, streamName string) {
-	ctx.publishersLock.Lock()
-	ctx.clientStreams[sessionId] = streamName
-	ctx.publishersLock.Unlock()
-}
-
 func (ctx *Context) AppendToWaitlist(streamName string, subscriber Subscriber) {
 	ctx.waitListLock.Lock()
 	defer ctx.waitListLock.Unlock()
@@ -114,7 +117,7 @@ func (ctx *Context) RemoveFromWaitlist(sessionId int, streamName string) {
 		return s.SessionId == sessionId
 	})
 	if len(filtered) == len(waitList) {
-		logger.WarningLog.Printf("Subscriber with id = %d was not int waitlist", sessionId)
+		logger.WarningLog.Printf("Subscriber with id = %d was not in waitlist", sessionId)
 	}
 	ctx.waitLists[streamName] = filtered
 

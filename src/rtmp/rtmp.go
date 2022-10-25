@@ -231,7 +231,7 @@ func (session *Session) HandleMessage(msg rtmpMsg.Message) error {
 		//do nothing
 
 	default:
-		logger.ErrorLog.Println("Unhandled message  - type unkown. type =", msg.MessageType)
+		logger.ErrorLog.Println("Unhandled message - type unkown. type =", msg.MessageType)
 	}
 
 	return err
@@ -472,20 +472,15 @@ func (session *Session) handlePublishCommand(objects []interface{}) error {
 		logger.WarningLog.Println("Bad stream name sent", objects[3])
 		return nil
 	}
-	if publisher := session.context.GetPublisher(streamName); publisher != nil {
+
+	streamCreated := session.context.CreateStream(session.sessionId, streamName, session.ClientMetadata)
+	if !streamCreated {
 		logger.InfoLog.Printf("Session %d attempted publishing stream name that already exists. stream name = %s", session.sessionId, streamName)
 		err := session.messageStreamer.WriteMessageToStream(rtmpMsg.NewStatusMessage("error",
 			"NetStream.Publish.BadName",
 			"Stream name already exists"))
 		return err
 	}
-	//Getting and setting the publisher should all happen in one transaction. Currently 2 threads could publish at the same time and overwrite one another, since there is no check
-	//in the set publisher method to see if a publisher already exists.
-	session.context.SetStreamName(session.sessionId, streamName)
-	session.context.SetPublisher(streamName, &Publisher{
-		SessionId:   session.sessionId,
-		Subscribers: []Subscriber{},
-		metadata:    session.ClientMetadata})
 
 	session.messageStreamer.WriteMessageToStream(rtmpMsg.NewStatusMessage(
 		"status",
