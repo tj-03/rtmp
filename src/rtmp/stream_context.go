@@ -48,10 +48,13 @@ func (ctx *Context) CreateStream(sessionId int, streamName string, metaData []by
 	defer ctx.publishersLock.Unlock()
 	defer ctx.clientStreamsLock.Unlock()
 	defer ctx.waitListLock.Unlock()
+	//if a publisher is already associated with the given stream name return false
 	if publisher := ctx.publishers[streamName]; publisher != nil {
 		return false
 	}
+	//associate sessionId to stream
 	ctx.clientStreams[sessionId] = streamName
+	//Remove any sessions in the waitlist and move them to the publisher's subscriber list
 	waitList := ctx.waitLists[streamName]
 	ctx.waitLists[streamName] = nil
 	if waitList == nil {
@@ -82,6 +85,7 @@ func (ctx *Context) RemovePublisher(sessionId int) {
 		return
 	}
 	publisher := ctx.publishers[streamName]
+	//This should never happen
 	if publisher == nil {
 		panic("Stream name set but clientstream not set")
 	}

@@ -77,6 +77,7 @@ func (mStreamer *MessageStreamer) WriteMessageToStream(msg Message) error {
 
 }
 
+//Returns number of messages written and any error that occured
 func (mStreamer *MessageStreamer) WriteMessagesToStream(messages ...Message) (int, error) {
 
 	for i, msg := range messages {
@@ -88,6 +89,7 @@ func (mStreamer *MessageStreamer) WriteMessagesToStream(messages ...Message) (in
 	return len(messages), nil
 }
 
+//https://rtmp.veriskope.com/docs/spec/#61-rtmp-message-format
 func (mStreamer *MessageStreamer) ReadMessageFromStream() (Message, error) {
 	cStreamer := &mStreamer.chunkStreamer
 	chunk, n, err := cStreamer.ReadChunkFromStream()

@@ -126,9 +126,10 @@ func (cStreamer *ChunkStreamer) WriteChunksToStream(chunks []Chunk) error {
 	return nil
 }
 
-func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, int, error) {
-	chunkPayloadSize := cReader.ChunkSize
-	reader := cReader.conn
+//https://rtmp.veriskope.com/docs/spec/#531chunk-format
+func (cStreamer *ChunkStreamer) ReadChunkFromStream() (Chunk, int, error) {
+	chunkPayloadSize := cStreamer.ChunkSize
+	reader := cStreamer.conn
 	fmtCsid, err := reader.ReadByte()
 	format := uint8(fmtCsid >> 6)
 	csid := uint16(fmtCsid & 0b00111111)
@@ -136,6 +137,8 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, int, error) {
 	if err != nil {
 		return Chunk{}, bytesRead, err
 	}
+
+	//https://rtmp.veriskope.com/docs/spec/#531chunk-format
 	var chunkBasicHeader ChunkBasicHeader
 	chunkBasicHeader.Fmt = format
 	switch csid {
@@ -165,6 +168,8 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, int, error) {
 	}
 	chunkBasicHeader.ChunkStreamId = uint64(csid)
 
+	//https://rtmp.veriskope.com/docs/spec/#5312-chunk-message-header
+	//No extended timestamp handling in this implementation
 	var chunkMessageHeader ChunkMessageHeader
 
 	switch format {
@@ -188,7 +193,7 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, int, error) {
 		messageTypeId := data[6]
 		chunkMessageHeader.MessageTypeId = messageTypeId
 		chunkMessageHeader.MessageStreamId = binary.LittleEndian.Uint32(data[7:11])
-		cReader.chunkStreams[int(csid)] = chunkMessageHeader
+		cStreamer.chunkStreams[int(csid)] = chunkMessageHeader
 	case 1:
 		headerSize := 7
 		data := make([]byte, headerSize)
@@ -208,7 +213,7 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, int, error) {
 		chunkMessageHeader.MessageLength = messageLength
 		messageTypeId := data[6]
 		chunkMessageHeader.MessageTypeId = messageTypeId
-		if header, ok := cReader.chunkStreams[int(csid)]; ok {
+		if header, ok := cStreamer.chunkStreams[int(csid)]; ok {
 			chunkMessageHeader.MessageStreamId = header.MessageStreamId
 		}
 	case 2:
@@ -223,7 +228,7 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, int, error) {
 			logger.ErrorLog.Println("Header read improperly", data, n)
 			return Chunk{}, bytesRead, fmt.Errorf("header read improperly")
 		}
-		if header, ok := cReader.chunkStreams[int(csid)]; ok {
+		if header, ok := cStreamer.chunkStreams[int(csid)]; ok {
 			chunkMessageHeader = header
 		} else {
 			errMsg := fmt.Sprintf("Client asked for previous chunk but there's no previous chunk. Chunk stream d = %d. FMT = %d\n", csid, format)
@@ -234,7 +239,7 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, int, error) {
 		timestamp := binary.BigEndian.Uint32(append([]byte{0}, data[0:3]...))
 		chunkMessageHeader.Timestamp = timestamp
 	case 3:
-		if header, ok := cReader.chunkStreams[int(csid)]; ok {
+		if header, ok := cStreamer.chunkStreams[int(csid)]; ok {
 			chunkMessageHeader = header
 		} else {
 			errMsg := fmt.Sprintf("Client asked for previous chunk but there's no previous chunk. Chunk stream d = %d. FMT = %d\n", csid, format)
@@ -242,21 +247,21 @@ func (cReader *ChunkStreamer) ReadChunkFromStream() (Chunk, int, error) {
 			//panic(errMsg)
 		}
 	}
-	cReader.chunkStreams[int(csid)] = chunkMessageHeader
+	cStreamer.chunkStreams[int(csid)] = chunkMessageHeader
 	chunk := Chunk{
 		BasicHeader:   chunkBasicHeader,
 		MessageHeader: chunkMessageHeader}
 
-	if cReader.bytesLeftToRead < 0 {
+	if cStreamer.bytesLeftToRead < 0 {
 		panic("bytes left to read < 0")
 	}
-	if cReader.bytesLeftToRead == 0 {
-		cReader.bytesLeftToRead = int(chunkMessageHeader.MessageLength)
+	if cStreamer.bytesLeftToRead == 0 {
+		cStreamer.bytesLeftToRead = int(chunkMessageHeader.MessageLength)
 	}
-	bytesLeft := cReader.bytesLeftToRead
+	bytesLeft := cStreamer.bytesLeftToRead
 	size := util.Min(bytesLeft, int(chunkPayloadSize))
 
-	cReader.bytesLeftToRead -= size
+	cStreamer.bytesLeftToRead -= size
 
 	data := make([]byte, size)
 	n, err := reader.Read(data)

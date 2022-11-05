@@ -5,6 +5,8 @@ import (
 	"math"
 )
 
+//https://rtmp.veriskope.com/pdf/amf0-file-format-specification.pdf
+
 func EncodeAMF0(vals ...interface{}) []byte {
 	data := []byte{}
 	for _, val := range vals {

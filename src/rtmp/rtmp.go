@@ -23,15 +23,15 @@ type Connection struct {
 	net.Conn
 }
 
-func (t Connection) ReadByte() (byte, error) {
+func (c *Connection) ReadByte() (byte, error) {
 	buf := make([]byte, 1)
-	_, err := t.Read(buf)
+	_, err := c.Read(buf)
 	return buf[0], err
 }
 
-func (t Connection) WriteByte(b byte) error {
+func (c *Connection) WriteByte(b byte) error {
 	buf := []byte{b}
-	_, err := t.Write(buf)
+	_, err := c.Write(buf)
 	return err
 }
 
@@ -104,8 +104,11 @@ type MessageResult struct {
 
 func (session *Session) HandleConnection(conn *Connection) error {
 	defer session.disconnect()
+	//Channel buffer size set to arbitrary size of 4
+	//No special reason for that buffer size but should be enough to process incoming messages without blocking
 	session.messageChannel = make(chan MessageResult, 4)
-	session.streamChannel = make(chan MessageResult, 4096)
+	session.streamChannel = make(chan MessageResult, 4)
+	//idk why this is 6 and not even sure what this is used for
 	session.streamId = 6
 	session.conn = conn
 	if err := session.CompleteHandshake(); err != nil {
@@ -124,7 +127,8 @@ func (session *Session) Run() error {
 	prevPingTime := time.Now()
 	go session.ReadMessages()
 	for {
-		//Deadline necessary to detect errors
+		//Deadline necessary to detect client side or server side errors
+		//Arbitrary timeout length, no special reason for why it's 15 seconds
 		deadLine := 15
 		session.conn.SetDeadline(time.Now().Add(time.Second * time.Duration(deadLine)))
 
@@ -141,6 +145,8 @@ func (session *Session) Run() error {
 			}
 		}
 
+		//Handle any messages received from the client session (sent from ReadMessages goroutine)
+		//Any detected errors will shutdown/disconnet the current session
 		select {
 		case msgResult := <-session.messageChannel:
 			if msgResult.Err != nil {
@@ -156,6 +162,7 @@ func (session *Session) Run() error {
 				return err
 			}
 
+		//Handle any messages sent to the stream we are playing (sent from the goroutine receiving the publisher stream)
 		case msgResult := <-session.streamChannel:
 			streamMsg := msgResult.Message
 			streamMsg.MessageStreamId = session.streamId
@@ -173,11 +180,13 @@ func (session *Session) Run() error {
 
 }
 
+//Used as a goroutine to asynchronously receive messages from client
 func (session *Session) ReadMessages() {
 	for {
 		msg, err := session.messageStreamer.ReadMessageFromStream()
 		switch msg.MessageType {
-		//Handle chunk size here to avoid reading new messages without changing the chunk size
+		//Handle write operations to the message streamer here to make sure future messages are read properly
+		//If we don't do it here and let the message handler do it the ReadMessages goroutine will read the next message before the chunk size is updated (data race)
 		case rtmpMsg.SetChunkSize:
 			session.handleSetChunkSize(msg.MessageData)
 			continue
@@ -190,7 +199,6 @@ func (session *Session) ReadMessages() {
 			close(session.messageChannel)
 			return
 		}
-		//Any write operations to the message streamer must be handled here to avoid data race
 		session.messageChannel <- MessageResult{msg, err}
 	}
 }
@@ -200,7 +208,8 @@ func (session *Session) HandleMessage(msg rtmpMsg.Message) error {
 	switch msg.MessageType {
 
 	case 0:
-		//logger.ErrorLog.Println("Message type 0")
+		//This only occurs if MessageStreamer read from the connection wrong or if the client side isn't working properly
+		//We do nothing here and eventually an EOF or timeout error will occur on our Connection object and the session will disconnect
 
 	case rtmpMsg.SetChunkSize:
 		err = session.handleSetChunkSize(msg.MessageData)
@@ -238,7 +247,7 @@ func (session *Session) HandleMessage(msg rtmpMsg.Message) error {
 
 }
 
-//If a publisher sends a unpublish message we should update the session state
+//This function is used to update session state if the streamer we are receiving data from stops streaming
 func (session *Session) handleStreamMessage(msg rtmpMsg.Message) error {
 	if msg.MessageType == rtmpMsg.CommandMsg0 {
 		objs, _, err := amf.DecodeAMF0Sequence(msg.MessageData)
@@ -263,6 +272,7 @@ func (session *Session) handleStreamMessage(msg rtmpMsg.Message) error {
 }
 
 func (session *Session) handleSetChunkSize(data []byte) error {
+	//According to RTMP spec the first bit of the 4 byte chunk size cannot be 0
 	if len(data) < 4 || data[0]&1 == 1 {
 		logger.WarningLog.Println("Set chunk size message err - first bit not 0", data)
 		return errors.New("invalid chunk size sent")
@@ -449,8 +459,8 @@ func (session *Session) handlePublishCommand(objects []interface{}) error {
 		return nil
 	}
 
-	streamCreated := session.context.CreateStream(session.sessionId, streamName, session.ClientMetadata)
-	if !streamCreated {
+	streamWasCreated := session.context.CreateStream(session.sessionId, streamName, session.ClientMetadata)
+	if !streamWasCreated {
 		logger.InfoLog.Printf("Session %d attempted publishing stream name that already exists. stream name = %s", session.sessionId, streamName)
 		err := session.messageStreamer.WriteMessageToStream(rtmpMsg.NewStatusMessage("error",
 			"NetStream.Publish.BadName",

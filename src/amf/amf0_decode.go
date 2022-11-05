@@ -6,6 +6,8 @@ import (
 	"math"
 )
 
+//https://rtmp.veriskope.com/pdf/amf0-file-format-specification.pdf
+
 func DecodeAMF0Sequence(data []byte) ([]interface{}, int, error) {
 	offset := 0
 	result := []interface{}{}

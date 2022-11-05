@@ -8,6 +8,8 @@ import (
 	"github.com/tj03/rtmp/src/util"
 )
 
+//https://rtmp.veriskope.com/docs/spec/#71rtmp-message-types
+
 type MessageType int
 type EventType int
 
