@@ -149,7 +149,6 @@ func (cStreamer *ChunkStreamer) ReadChunkFromStream() (Chunk, int, error) {
 		csid = uint16(id + 64)
 		bytesRead++
 	//If 6 bit csid is 1, we have 2 byte csid (64 + 2 byte csid)
-	//this is wrong lol -> 3 byte calculation off, go to specs to see why
 	case 1:
 		data := make([]byte, 2)
 		n, err := reader.Read(data)

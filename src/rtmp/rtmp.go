@@ -103,7 +103,6 @@ type MessageResult struct {
 }
 
 func (session *Session) HandleConnection(conn *Connection) error {
-	defer session.disconnect()
 	//Channel buffer size set to arbitrary size of 4
 	//No special reason for that buffer size but should be enough to process incoming messages without blocking
 	session.messageChannel = make(chan MessageResult, 4)
@@ -111,6 +110,7 @@ func (session *Session) HandleConnection(conn *Connection) error {
 	//idk why this is 6 and not even sure what this is used for
 	session.streamId = 6
 	session.conn = conn
+	defer session.disconnect()
 	if err := session.CompleteHandshake(); err != nil {
 		logger.ErrorLog.Printf("Session %d handshake failed: err: %s", session.sessionId, err.Error())
 		return err
@@ -181,6 +181,7 @@ func (session *Session) Run() error {
 }
 
 //Used as a goroutine to asynchronously receive messages from client
+//This goroutine handles the closing of the messageChannel
 func (session *Session) ReadMessages() {
 	for {
 		msg, err := session.messageStreamer.ReadMessageFromStream()
@@ -323,6 +324,7 @@ func (session *Session) handleCommandMessage(data []byte) error {
 	return nil
 }
 
+//https://rtmp.veriskope.com/docs/spec/#7211connect
 func (session *Session) handleConnectCommand(objects []interface{}) error {
 	result := "_result"
 	logger.InfoLog.Println("Connect object from client", objects[2])
@@ -340,6 +342,8 @@ func (session *Session) handleConnectCommand(objects []interface{}) error {
 
 	response := amf.EncodeAMF0(result, 1, props, info)
 
+	//RTMP spec specifies that the WindowAck, SetBandwidth, UserControl(StreamBegin), and a response object be sent to the client after
+	//receiving a connect command message. Additionally it seems that most clients expect a SetChunkSize message as well, not sure why.
 	_, err := session.messageStreamer.WriteMessagesToStream(
 		rtmpMsg.NewWinAckMessage(5000000),
 		rtmpMsg.NewSetPeerBandwidthMessage(5000000, 2),
@@ -354,6 +358,7 @@ func (session *Session) handleConnectCommand(objects []interface{}) error {
 	return nil
 }
 
+//https://rtmp.veriskope.com/docs/spec/#7213createstream
 func (session *Session) handleCreateStreamCommand(objects []interface{}) error {
 	var responseData []byte
 	validObjects := len(objects) >= 2
@@ -376,6 +381,7 @@ func (session *Session) handleCreateStreamCommand(objects []interface{}) error {
 	return err
 }
 
+//https://rtmp.veriskope.com/docs/spec/#7221play
 func (session *Session) handlePlayCommand(objects []interface{}) error {
 	if len(objects) < 4 {
 		logger.WarningLog.Printf("Session %d: client sent invalid objects", session.sessionId)
@@ -386,6 +392,12 @@ func (session *Session) handlePlayCommand(objects []interface{}) error {
 	if !ok {
 		logger.WarningLog.Printf("Session %d: client sent invalid stream name", session.sessionId)
 		logger.WarningLog.Println("Bad stream name sent", objects[3])
+		return nil
+	}
+
+	if session.state.Playing {
+		logger.WarningLog.Printf("Session %d: client attempted to play when already playing", session.sessionId)
+		session.messageStreamer.WriteMessageToStream(rtmpMsg.NewStatusMessage("error", "NetStream.Play.BadConnection", "Cannot play stream when already playing"))
 		return nil
 	}
 
