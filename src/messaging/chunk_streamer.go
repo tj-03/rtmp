@@ -17,8 +17,7 @@ type Connection interface {
 }
 
 type ChunkBasicHeader struct {
-	Fmt uint8
-	//is this the right data type?
+	Fmt           uint8
 	ChunkStreamId uint64
 }
 

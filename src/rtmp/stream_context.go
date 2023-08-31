@@ -29,7 +29,7 @@ type Subscriber struct {
 }
 
 //Context holds information about different RTMP sessions to enable different sessions to communicate with each other via channels.
-//Provides methods to read/write data using RWMutex.
+//Provides methods to read/write data synchornized using RWMutex.
 type Context struct {
 	publishersLock    sync.RWMutex
 	clientStreamsLock sync.RWMutex

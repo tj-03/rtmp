@@ -12,6 +12,8 @@ import (
 	rtmpMsg "github.com/tj03/rtmp/src/messaging"
 )
 
+//There are still some data race issues
+
 type Server struct {
 	//change to arr?
 	context      *Context
@@ -75,7 +77,7 @@ func (server *Server) onConnection(c *Connection) {
 	server.sessionCount++
 }
 
-//Session state enum. Only used for disconnect state currently. Will eventually add publishing, playing etc. states.
+//Session state enum. Only used for disconnect and pause states currently. Will eventually add publishing, playing etc. states.
 type RTMPSessionState struct {
 	Connected bool
 	Playing   bool
@@ -107,8 +109,6 @@ func (session *Session) HandleConnection(conn *Connection) error {
 	//No special reason for that buffer size but should be enough to process incoming messages without blocking
 	session.messageChannel = make(chan MessageResult, 4)
 	session.streamChannel = make(chan MessageResult, 4)
-	//idk why this is 6 and not even sure what this is used for
-	session.streamId = 6
 	session.conn = conn
 	defer session.disconnect()
 	if err := session.CompleteHandshake(); err != nil {
@@ -134,15 +134,13 @@ func (session *Session) Run() error {
 
 		//If a stream is paused we want to make sure the client is still available during that time
 		//If they dont send a ping response the connection will close
-		if session.state.Paused {
-			if time.Since(prevPingTime) > time.Second {
-				curTime := time.Now()
-				pingMsg := rtmpMsg.NewPingMsg(curTime, session.streamId)
-				if err := session.messageStreamer.WriteMessageToStream(pingMsg); err != nil {
-					return err
-				}
-				prevPingTime = curTime
+		if session.state.Paused && time.Since(prevPingTime) > time.Second {
+			curTime := time.Now()
+			pingMsg := rtmpMsg.NewPingMsg(curTime, session.streamId)
+			if err := session.messageStreamer.WriteMessageToStream(pingMsg); err != nil {
+				return err
 			}
+			prevPingTime = curTime
 		}
 
 		//Handle any messages received from the client session (sent from ReadMessages goroutine)
@@ -195,12 +193,11 @@ func (session *Session) ReadMessages() {
 			session.handleSetWindowAckSize(msg.MessageData)
 			continue
 		}
+		session.messageChannel <- MessageResult{msg, err}
 		if err != nil {
-			session.messageChannel <- MessageResult{rtmpMsg.Message{}, err}
 			close(session.messageChannel)
 			return
 		}
-		session.messageChannel <- MessageResult{msg, err}
 	}
 }
 
@@ -343,7 +340,7 @@ func (session *Session) handleConnectCommand(objects []interface{}) error {
 	response := amf.EncodeAMF0(result, 1, props, info)
 
 	//RTMP spec specifies that the WindowAck, SetBandwidth, UserControl(StreamBegin), and a response object be sent to the client after
-	//receiving a connect command message. Additionally it seems that most clients expect a SetChunkSize message as well, not sure why.
+	//receiving a connect command message. Additionally it seems that OBS Studio and FFMPEG expect  a SetChunkSize message as well, not sure why.
 	_, err := session.messageStreamer.WriteMessagesToStream(
 		rtmpMsg.NewWinAckMessage(5000000),
 		rtmpMsg.NewSetPeerBandwidthMessage(5000000, 2),
@@ -401,6 +398,7 @@ func (session *Session) handlePlayCommand(objects []interface{}) error {
 		return nil
 	}
 
+	//TODO: fix data race -> publisher may be created between the time we check for a publisher and add to waitlist
 	//Subscribe to stream/publisher
 	publisher := session.context.GetPublisher(streamName)
 	if publisher == nil {
@@ -426,7 +424,7 @@ func (session *Session) handlePlayCommand(objects []interface{}) error {
 	metaDataMsg := rtmpMsg.NewMetaDataMessage(publisher.GetMetadata(), session.streamId)
 	session.messageStreamer.WriteMessageToStream(metaDataMsg)
 
-	//Client cant play audio/video without seqeunce headers (assuming FLV)
+	//Client cant play audio/video without seqeunce headers (assuming client is using FLV)
 	if aacSeqHeader := publisher.GetAACSequenceHeader(); aacSeqHeader != nil {
 		aacMsg := rtmpMsg.NewAudioMessage(aacSeqHeader, session.streamId)
 		err := session.messageStreamer.WriteMessageToStream(aacMsg)
@@ -521,22 +519,30 @@ func (session *Session) handlePauseCommand(objects []interface{}) error {
 		if !session.state.Paused {
 			return nil
 		}
-		if publisher := session.context.GetPublisher(session.curStream); publisher != nil {
-
-			if aacSeqHeader := publisher.GetAACSequenceHeader(); aacSeqHeader != nil {
-				aacHeaderMsg := rtmpMsg.NewAudioMessage(aacSeqHeader, session.streamId)
-				if err := session.messageStreamer.WriteMessageToStream(aacHeaderMsg); err != nil {
-					return err
-				}
-			}
-			if avcSeqHeader := publisher.GetAVCSequenceHeader(); avcSeqHeader != nil {
-				avcHeaderMsg := rtmpMsg.NewVideoMessage(avcSeqHeader, session.streamId)
-				if err := session.messageStreamer.WriteMessageToStream(avcHeaderMsg); err != nil {
-					return err
-				}
-			}
-			publisher.AddSubscriber(session.streamChannel, session.sessionId)
+		publisher := session.context.GetPublisher(session.curStream)
+		//if publisher not found just return
+		if publisher == nil {
+			return nil
 		}
+		aacSeqHeader := publisher.GetAACSequenceHeader()
+		//if there is no sequence header for audio/video we don't need to send anything and just return
+		if aacSeqHeader == nil {
+			return nil
+		}
+		aacHeaderMsg := rtmpMsg.NewAudioMessage(aacSeqHeader, session.streamId)
+		if err := session.messageStreamer.WriteMessageToStream(aacHeaderMsg); err != nil {
+			return err
+		}
+		avcSeqHeader := publisher.GetAVCSequenceHeader()
+		//if there is no sequence header for audio/video we don't need to send anything and just return
+		if avcSeqHeader == nil {
+			return nil
+		}
+		avcHeaderMsg := rtmpMsg.NewVideoMessage(avcSeqHeader, session.streamId)
+		if err := session.messageStreamer.WriteMessageToStream(avcHeaderMsg); err != nil {
+			return err
+		}
+		publisher.AddSubscriber(session.streamChannel, session.sessionId)
 		unpauseMsg := rtmpMsg.NewStatusMessage("status",
 			"NetStream.Unause.Notify",
 			"Stream resumed")
@@ -575,15 +581,19 @@ func (session *Session) handleAudioMessage(data []byte) error {
 		isSequenceHeader = soundFormat == 10 && data[1] == 0
 	}
 
-	if streamName, ok := session.context.GetStreamName(session.sessionId); ok {
-		if publisher := session.context.GetPublisher(streamName); publisher != nil {
-			if isSequenceHeader {
-				publisher.SetAACSequenceHeader(data)
-			}
-			msg := rtmpMsg.NewAudioMessage(data, session.streamId)
-			publisher.BroadcastMessage(msg)
-		}
+	streamName, ok := session.context.GetStreamName(session.sessionId)
+	if !ok {
+		return nil
 	}
+	publisher := session.context.GetPublisher(streamName)
+	if publisher == nil {
+		return nil
+	}
+	if isSequenceHeader {
+		publisher.SetAACSequenceHeader(data)
+	}
+	msg := rtmpMsg.NewAudioMessage(data, session.streamId)
+	publisher.BroadcastMessage(msg)
 	return nil
 }
 
@@ -596,15 +606,19 @@ func (session *Session) handleVideoMessage(data []byte) error {
 		codecId = data[0] & 0b00001111
 		isSequenceHeader = codecId == 7 && frameType == 1 && data[1] == 0
 	}
-	if streamName, ok := session.context.GetStreamName(session.sessionId); ok {
-		if publisher := session.context.GetPublisher(streamName); publisher != nil {
-			if isSequenceHeader {
-				publisher.SetAVCSequenceHeader(data)
-			}
-			msg := rtmpMsg.NewVideoMessage(data, session.streamId)
-			publisher.BroadcastMessage(msg)
-		}
+	streamName, ok := session.context.GetStreamName(session.sessionId)
+	if !ok {
+		return nil
 	}
+	publisher := session.context.GetPublisher(streamName)
+	if publisher == nil {
+		return nil
+	}
+	if isSequenceHeader {
+		publisher.SetAVCSequenceHeader(data)
+	}
+	msg := rtmpMsg.NewVideoMessage(data, session.streamId)
+	publisher.BroadcastMessage(msg)
 	return nil
 }
 
